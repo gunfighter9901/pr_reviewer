@@ -1,0 +1,73 @@
+[
+  {
+    "id": "golden-001-sqli-and-eval",
+    "description": "Public repository PR introducing raw f-string SQL injection and dynamic eval()",
+    "repo": "acme-corp/payment-gateway",
+    "pr_number": 101,
+    "is_public": true,
+    "changed_files": ["backend/payments/query.py"],
+    "diff": "diff --git a/backend/payments/query.py b/backend/payments/query.py\n--- a/backend/payments/query.py\n+++ b/backend/payments/query.py\n@@ -14,3 +14,6 @@ class LedgerQuery:\n+    def fetch_user_ledger(self, account_id: str, filter_expr: str):\n+         \"\"\"Fetch ledger rows for account_id.\"\"\"\n+        sql = f\"SELECT * FROM ledger WHERE account_id = '{account_id}'\"\n+        computed = eval(filter_expr)\n+        return sql, computed\n",
+    "expected_categories": ["sql_injection", "code_injection"],
+    "expected_routing": {
+      "sql_injection": "private_security_alert",
+      "code_injection": "private_security_alert"
+    },
+    "expect_zero_findings": false
+  },
+  {
+    "id": "golden-002-hardcoded-secret",
+    "description": "PR committing a hardcoded production OpenAI API key in config module",
+    "repo": "acme-corp/ai-worker",
+    "pr_number": 102,
+    "is_public": true,
+    "changed_files": ["src/config/keys.py"],
+    "diff": "diff --git a/src/config/keys.py b/src/config/keys.py\n--- a/src/config/keys.py\n+++ b/src/config/keys.py\n@@ -1,2 +1,4 @@\n+# Production credentials\n+OPENAI_API_KEY = \"sk-live-9876543210abcdef123456\"\n",
+    "expected_categories": ["hardcoded_secret"],
+    "expected_routing": {
+      "hardcoded_secret": "private_security_alert"
+    },
+    "expect_zero_findings": false
+  },
+  {
+    "id": "golden-003-async-blocking-and-swallowed-exception",
+    "description": "PR with synchronous time.sleep in async handler and silent exception swallowing",
+    "repo": "acme-corp/order-service",
+    "pr_number": 103,
+    "is_public": true,
+    "changed_files": ["src/orders/handler.py", "tests/test_handler.py"],
+    "diff": "diff --git a/src/orders/handler.py b/src/orders/handler.py\n--- a/src/orders/handler.py\n+++ b/src/orders/handler.py\n@@ -20,3 +20,8 @@ async def sync_order_state(order_id: str) -> bool:\n+    \"\"\"Synchronize order state with fulfillment service.\"\"\"\n+    try:\n+        time.sleep(2)\n+    except Exception: pass\n+    return True\n",
+    "expected_categories": ["blocking_event_loop", "swallowed_exception"],
+    "expected_routing": {
+      "blocking_event_loop": "auto_post",
+      "swallowed_exception": "auto_post"
+    },
+    "expect_zero_findings": false
+  },
+  {
+    "id": "golden-004-clean-well-tested-pr",
+    "description": "Clean, well-documented, well-tested PR that should trigger zero findings (Selectivity Over Coverage)",
+    "repo": "acme-corp/math-utils",
+    "pr_number": 104,
+    "is_public": true,
+    "changed_files": ["src/math_utils.py", "tests/test_math_utils.py"],
+    "diff": "diff --git a/src/math_utils.py b/src/math_utils.py\n--- a/src/math_utils.py\n+++ b/src/math_utils.py\n@@ -1,2 +1,5 @@\n+def clamp_score(value: float, low: float = 0.0, high: float = 1.0) -> float:\n+    \"\"\"Clamp a floating point score to the closed interval [low, high].\"\"\"\n+    return max(low, min(high, value))\ndiff --git a/tests/test_math_utils.py b/tests/test_math_utils.py\n--- a/tests/test_math_utils.py\n+++ b/tests/test_math_utils.py\n@@ -1,2 +1,4 @@\n+def test_clamp_score_bounds() -> None:\n+    \"\"\"Verify clamp_score enforces lower and upper bounds.\"\"\"\n+    assert clamp_score(1.5) == 1.0\n",
+    "expected_categories": [],
+    "expected_routing": {},
+    "expect_zero_findings": true
+  },
+  {
+    "id": "golden-005-low-confidence-hitl-escalation",
+    "description": "Ambiguous optional dict.get().strip() chain and untracked TODO routed to HITL queue",
+    "repo": "acme-corp/user-profile",
+    "pr_number": 105,
+    "is_public": true,
+    "changed_files": ["src/profile/normalizer.py", "tests/test_normalizer.py"],
+    "diff": "diff --git a/src/profile/normalizer.py b/src/profile/normalizer.py\n--- a/src/profile/normalizer.py\n+++ b/src/profile/normalizer.py\n@@ -8,2 +8,4 @@ def _normalize(payload: dict) -> str:\n+    # TODO: handle locale overrides\n+    return payload.get(\"display_name\").strip()\n",
+    "expected_categories": ["null_dereference", "untracked_todo_comment"],
+    "expected_routing": {
+      "null_dereference": "hitl_escalate",
+      "untracked_todo_comment": "hitl_escalate"
+    },
+    "expect_zero_findings": false
+  }
+]

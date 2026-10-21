@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GENESIS DONE SPECIFICATION — Production Multi-Agent PR Reviewer</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; line-height: 1.6; max-width: 1080px; margin: 2rem auto; padding: 0 1.5rem; color: #0f172a; background: #f8fafc; }
+    h1, h2, h3 { color: #1e293b; }
+    .card { background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; padding: 1.25rem; margin-bottom: 1.25rem; }
+    .badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 4px; font-size: 0.8rem; font-weight: 600; background: #dbeafe; color: #1e40af; }
+    table { width: 100%; border-collapse: collapse; margin-top: 0.75rem; }
+    th, td { border: 1px solid #cbd5e1; padding: 0.6rem; text-align: left; font-size: 0.9rem; }
+    th { background: #f1f5f9; }
+    code { background: #f1f5f9; padding: 0.15rem 0.35rem; border-radius: 4px; font-family: ui-monospace, monospace; }
+  </style>
+</head>
+<body>
+  <h1>.genesis/done.html — Locked System Specification &amp; Invariants</h1>
+  <p><span class="badge">LOCKED SPECIFICATION</span> <strong>L0 Seed:</strong> Selectivity Over Coverage — Reclaim senior engineer attention by emitting only grounded, high-confidence, evidence-backed code review findings while routing ambiguous or critical security issues to the Human-in-the-Loop (HITL) queue.</p>
+
+  <div class="card">
+    <h2>1. Non-Negotiable System Invariants (INV-1 .. INV-7)</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Invariant Name</th>
+          <th>Specification &amp; Enforcement Mechanism</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>INV-1</code></td>
+          <td>Verify Before Parse</td>
+          <td>Webhook HMAC-SHA256 verification executes on raw request bytes <em>before</em> JSON parsing or DB/queue calls. Return <code>401/403</code> on missing/invalid signature; return <code>400 Bad Request</code> (never <code>500</code>) on validly signed but malformed JSON.</td>
+        </tr>
+        <tr>
+          <td><code>INV-2</code></td>
+          <td>Idempotent Ingress</td>
+          <td>Every webhook delivery ID (<code>X-GitHub-Delivery</code>) is deduplicated atomically. Retries are acknowledged (<code>200/202</code>) and dropped without re-running the LLM workflow graph.</td>
+        </tr>
+        <tr>
+          <td><code>INV-3</code></td>
+          <td>Framework Agnosticism</td>
+          <td>Domain and agent logic must never import LangGraph primitives directly outside <code>backend/orchestrator/langgraph_adapter.py</code>. All orchestration goes through abstract <code>WorkflowEngine</code> (<code>run()</code>, <code>resume()</code>, <code>get_state()</code>).</td>
+        </tr>
+        <tr>
+          <td><code>INV-4</code></td>
+          <td>Immutable Audit Spine</td>
+          <td><code>agent_events</code> hypertable is strictly append-only enforced via SQL triggers on <code>BEFORE UPDATE OR DELETE</code> (row-level) and <code>BEFORE TRUNCATE</code> (statement-level) raising <code>agent_events is append-only and immutable</code>. Every webhook, LLM call, retrieval query, and gate decision emits a span.</td>
+        </tr>
+        <tr>
+          <td><code>INV-5</code></td>
+          <td>Dimensional Consistency</td>
+          <td><code>EMBEDDING_DIM</code> in <code>backend/config.py</code> is validated at startup and against the <code>code_chunks.embedding</code> schema definition (<code>vector(1536)</code>). Mismatches fail fast with a clear configuration error.</td>
+        </tr>
+        <tr>
+          <td><code>INV-6</code></td>
+          <td>Fault Isolation &amp; Timeouts</td>
+          <td>Every external I/O call and every parallel specialist node has an explicit timeout (<code>NODE_TIMEOUT_SECONDS</code>), exponential backoff retry, circuit breaker, and graceful fallback so a hung node never deadlocks the aggregator.</td>
+        </tr>
+        <tr>
+          <td><code>INV-7</code></td>
+          <td>Grounded Evidence</td>
+          <td>Zero findings may be emitted or posted without a valid <code>file_path</code>, <code>line_start</code>, <code>line_end</code>, <code>evidence_snippet</code>, <code>rationale</code>, and calibrated <code>confidence</code> in <code>[0.0, 1.0]</code>.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>2. Milestone Verification Matrix (M1 – M8)</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Milestone</th>
+          <th>Deliverables</th>
+          <th>Verification Command</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>M1</strong></td>
+          <td>FastAPI Webhook Ingress, raw-byte HMAC-SHA256 verification, payload validation, idempotent router</td>
+          <td><code>pytest tests/test_m1_webhook.py -v</code></td>
+        </tr>
+        <tr>
+          <td><strong>M2</strong></td>
+          <td>Unified Tiger Data Spine migrations, <code>agent_events</code> hypertable, immutability triggers, continuous aggregates</td>
+          <td><code>pytest tests/test_m2_spine.py -v</code></td>
+        </tr>
+        <tr>
+          <td><strong>M3</strong></td>
+          <td>Event Spine logger &amp; Continuous Aggregate Budget Guard circuit breaker</td>
+          <td><code>pytest tests/test_m3_events.py -v</code></td>
+        </tr>
+        <tr>
+          <td><strong>M4</strong></td>
+          <td>Redis + ARQ worker pool, abstract <code>WorkflowEngine</code>, <code>LangGraphEngine</code> parallel fan-out/fan-in with checkpointing</td>
+          <td><code>pytest tests/test_m4_orchestrator.py -v</code></td>
+        </tr>
+        <tr>
+          <td><strong>M5</strong></td>
+          <td>4 Specialist Agents (Security, Quality, Testing, Docs), Versioned Prompt Registry, Model Router, Deduplicating Aggregator</td>
+          <td><code>pytest tests/test_m5_agents.py -v</code></td>
+        </tr>
+        <tr>
+          <td><strong>M6</strong></td>
+          <td>AST/Code chunker, embedder, Hybrid Retriever (DiskANN vector similarity + PostgreSQL FTS + Episodic + Procedural memory)</td>
+          <td><code>pytest tests/test_m6_retrieval.py -v</code></td>
+        </tr>
+        <tr>
+          <td><strong>M7</strong></td>
+          <td>Selectivity &amp; HITL Gate, private critical security routing, GitHub PR Poster, Circuit Breaker, Feedback Decay loop</td>
+          <td><code>pytest tests/test_m7_hitl.py -v</code></td>
+        </tr>
+        <tr>
+          <td><strong>M8</strong></td>
+          <td>Next.js Operational Dashboard (HITL Queue, Trace Viewer, Cost Telemetry) &amp; Golden Dataset Evaluation Harness</td>
+          <td><code>pytest &amp;&amp; python evals/run_evals.py &amp;&amp; npm --prefix frontend run build</code></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>

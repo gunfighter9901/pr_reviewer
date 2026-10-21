@@ -1,0 +1,74 @@
+version: "3.9"
+
+services:
+  tiger-db:
+    image: timescale/timescaledb-ha:pg16
+    container_name: pr-reviewer-tiger-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: tsdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./backend/db/migrations/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d tsdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: pr-reviewer-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  ingress:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: uvicorn backend.webhook.app:app --host 0.0.0.0 --port 8000
+    env_file:
+      - .env.example
+    environment:
+      TIGER_DATABASE_URL: postgresql://postgres:password@tiger-db:5432/tsdb
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    depends_on:
+      tiger-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: arq backend.worker.WorkerSettings
+    env_file:
+      - .env.example
+    environment:
+      TIGER_DATABASE_URL: postgresql://postgres:password@tiger-db:5432/tsdb
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      tiger-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    depends_on:
+      - ingress

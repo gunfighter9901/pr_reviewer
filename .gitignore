@@ -1,0 +1,87 @@
+# ---------------------------------------------------------------------------
+# Secrets & credentials (NEVER commit)
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+certs/
+secrets/
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+.installed.cfg
+
+# Python tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+
+# ---------------------------------------------------------------------------
+# Node.js / Next.js (frontend)
+# ---------------------------------------------------------------------------
+node_modules/
+.next/
+out/
+.turbo/
+.vercel/
+*.tsbuildinfo
+next-env.d.ts
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---------------------------------------------------------------------------
+# Runtime artifacts & logs
+# ---------------------------------------------------------------------------
+*.log
+logs/
+*.pid
+*.seed
+*.sqlite
+*.sqlite3
+*.db
+
+# Local Docker overrides
+docker-compose.override.yml
+
+# ---------------------------------------------------------------------------
+# OS / editor / IDE
+# ---------------------------------------------------------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

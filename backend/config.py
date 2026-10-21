@@ -1,0 +1,86 @@
+"""Validated Pydantic Settings enforcing system configuration and INV-5 (Dimensional Consistency)."""
+
+from __future__ import annotations
+
+import re
+from functools import lru_cache
+from pathlib import Path
+from typing import Optional
+
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class DimensionMismatchError(ValueError):
+    """Raised when EMBEDDING_DIM does not match the database schema vector(N) column (INV-5)."""
+
+
+class Settings(BaseSettings):
+    """Application settings loaded from environment variables or .env file."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # GitHub Ingress & Egress
+    GITHUB_WEBHOOK_SECRET: str = Field(default="dev_webhook_secret_change_me", min_length=1)
+    GITHUB_APP_ID: str = Field(default="123456")
+    GITHUB_PRIVATE_KEY_PATH: str = Field(default="./certs/github-private-key.pem")
+    GITHUB_TOKEN: str = Field(default="ghp_fallback_personal_access_token")
+
+    # Unified Data Spine (Tiger Cloud / TimescaleDB + pgvectorscale)
+    TIGER_DATABASE_URL: str = Field(
+        default="postgresql://user:password@localhost:5432/tsdb?sslmode=disable"
+    )
+
+    # Queue & Checkpointing (Upstash / Redis)
+    REDIS_URL: str = Field(default="redis://localhost:6379/0")
+
+    # LLM Providers & Embeddings
+    OPENAI_API_KEY: str = Field(default="sk-test-openai-key")
+    ANTHROPIC_API_KEY: str = Field(default="sk-ant-test-anthropic-key")
+    EMBEDDING_MODEL: str = Field(default="text-embedding-3-small")
+    EMBEDDING_DIM: int = Field(default=1536, gt=0)
+
+    # Autonomy, Selectivity & Economics Guards
+    CONFIDENCE_THRESHOLD: float = Field(default=0.75, ge=0.0, le=1.0)
+    DAILY_BUDGET_USD: float = Field(default=10.00, gt=0.0)
+    NODE_TIMEOUT_SECONDS: float = Field(default=30.0, gt=0.0)
+
+    @field_validator("GITHUB_WEBHOOK_SECRET")
+    @classmethod
+    def _validate_non_blank_secret(cls, value: str) -> str:
+        if not value or not value.strip():
+            raise ValueError("GITHUB_WEBHOOK_SECRET must not be empty or whitespace")
+        return value
+
+    def validate_schema_dimension(self, schema_dim: int) -> None:
+        """Enforce INV-5: EMBEDDING_DIM must match code_chunks.embedding vector(N)."""
+        if self.EMBEDDING_DIM != schema_dim:
+            raise DimensionMismatchError(
+                f"INV-5 Violation: Configured EMBEDDING_DIM={self.EMBEDDING_DIM} "
+                f"does not match code_chunks.embedding schema vector({schema_dim})."
+            )
+
+    def validate_against_migration_sql(self, sql_path: Optional[Path | str] = None) -> int:
+        """Parse migration SQL and assert code_chunks.embedding vector(N) matches EMBEDDING_DIM."""
+        if sql_path is None:
+            sql_path = Path(__file__).resolve().parent / "db" / "migrations" / "001_init.sql"
+        path = Path(sql_path)
+        if not path.exists():
+            raise FileNotFoundError(f"Migration SQL file not found at {path}")
+        sql_text = path.read_text(encoding="utf-8")
+        match = re.search(r"embedding\s+vector\s*\(\s*(\d+)\s*\)", sql_text, re.IGNORECASE)
+        if not match:
+            raise ValueError(f"Could not locate embedding vector(N) column in {path}")
+        schema_dim = int(match.group(1))
+        self.validate_schema_dimension(schema_dim)
+        return schema_dim
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    """Return cached Settings instance."""
+    return Settings()

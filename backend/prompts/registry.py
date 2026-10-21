@@ -1,0 +1,141 @@
+"""Versioned Prompt Registry for Multi-Agent Specialist Prompts (M5)."""
+
+from __future__ import annotations
+
+import hashlib
+from dataclasses import dataclass
+from typing import Dict, Optional
+
+
+@dataclass(frozen=True)
+class PromptTemplate:
+    """Immutable, versioned specialist prompt definition."""
+
+    agent_type: str
+    version: str
+    system_prompt: str
+    user_template: str
+
+    @property
+    def version_id(self) -> str:
+        return f"{self.agent_type}@{self.version}"
+
+    @property
+    def sha256(self) -> str:
+        payload = f"{self.version_id}::{self.system_prompt}::{self.user_template}"
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+    def render_user_prompt(
+        self,
+        *,
+        repo: str,
+        pr_number: int,
+        diff: str,
+        semantic_context: str = "",
+        episodic_context: str = "",
+        procedural_context: str = "",
+    ) -> str:
+        return self.user_template.format(
+            repo=repo,
+            pr_number=pr_number,
+            diff=diff,
+            semantic_context=semantic_context or "None",
+            episodic_context=episodic_context or "None",
+            procedural_context=procedural_context or "None",
+        )
+
+
+DEFAULT_PROMPTS: tuple[PromptTemplate, ...] = (
+    PromptTemplate(
+        agent_type="security",
+        version="v1.2.0",
+        system_prompt=(
+            "You are SecurityAgent, a staff application security reviewer. "
+            "Prioritize selectivity over coverage. Report only exploitable vulnerabilities "
+            "(SQLi, RCE/eval, command injection, hardcoded secrets, unsafe deserialization, auth bypass) "
+            "grounded in exact diff lines with step-by-step technical rationale."
+        ),
+        user_template=(
+            "Repository: {repo} (PR #{pr_number})\n"
+            "Procedural Rules:\n{procedural_context}\n"
+            "Past Disputes:\n{episodic_context}\n"
+            "Impacted Callers:\n{semantic_context}\n"
+            "Diff:\n{diff}"
+        ),
+    ),
+    PromptTemplate(
+        agent_type="quality",
+        version="v1.2.0",
+        system_prompt=(
+            "You are QualityAgent, a principal systems engineer focused on logic correctness, "
+            "null-safety, concurrency/async hazards, exception handling, and adherence to ADRs. "
+            "Emit only high-signal findings backed by exact code slices."
+        ),
+        user_template=(
+            "Repository: {repo} (PR #{pr_number})\n"
+            "Procedural Rules:\n{procedural_context}\n"
+            "Past Disputes:\n{episodic_context}\n"
+            "Semantic Context:\n{semantic_context}\n"
+            "Diff:\n{diff}"
+        ),
+    ),
+    PromptTemplate(
+        agent_type="testing",
+        version="v1.1.0",
+        system_prompt=(
+            "You are TestingAgent, a test architecture specialist. "
+            "Identify untested critical branches, missing negative/edge-case tests, and tautological assertions."
+        ),
+        user_template=(
+            "Repository: {repo} (PR #{pr_number})\n"
+            "Semantic Context:\n{semantic_context}\n"
+            "Diff:\n{diff}"
+        ),
+    ),
+    PromptTemplate(
+        agent_type="docs",
+        version="v1.1.0",
+        system_prompt=(
+            "You are DocsAgent, an API contract & documentation specialist. "
+            "Detect docstring parameter drift, undocumented public interfaces, and misleading comments."
+        ),
+        user_template=(
+            "Repository: {repo} (PR #{pr_number})\n"
+            "Procedural Rules:\n{procedural_context}\n"
+            "Diff:\n{diff}"
+        ),
+    ),
+)
+
+
+class PromptRegistry:
+    """Registry managing versioned prompts per specialist agent concern."""
+
+    def __init__(self) -> None:
+        self._prompts: Dict[str, Dict[str, PromptTemplate]] = {}
+        self._active_versions: Dict[str, str] = {}
+        for tmpl in DEFAULT_PROMPTS:
+            self.register(tmpl, set_active=True)
+
+    def register(self, template: PromptTemplate, set_active: bool = True) -> None:
+        versions = self._prompts.setdefault(template.agent_type, {})
+        versions[template.version] = template
+        if set_active or template.agent_type not in self._active_versions:
+            self._active_versions[template.agent_type] = template.version
+
+    def get(self, agent_type: str, version: Optional[str] = None) -> PromptTemplate:
+        if agent_type not in self._prompts:
+            raise KeyError(f"Unknown specialist agent_type '{agent_type}' in PromptRegistry")
+        resolved_version = version or self._active_versions[agent_type]
+        if resolved_version not in self._prompts[agent_type]:
+            raise KeyError(
+                f"Version '{resolved_version}' not found for agent_type '{agent_type}'"
+            )
+        return self._prompts[agent_type][resolved_version]
+
+
+_GLOBAL_REGISTRY = PromptRegistry()
+
+
+def get_prompt_registry() -> PromptRegistry:
+    return _GLOBAL_REGISTRY
