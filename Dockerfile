@@ -6,6 +6,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+ENV PORT=8000
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -20,4 +22,4 @@ RUN mkdir -p /data
 
 EXPOSE 8000
 
-CMD ["uvicorn", "backend.webhook.app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "uvicorn backend.webhook.app:app --host 0.0.0.0 --port ${PORT:-8000}"]

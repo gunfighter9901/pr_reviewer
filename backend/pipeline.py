@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 from backend.config import Settings, get_settings
+from backend.diff_utils import select_reviewable_diff
 from backend.gates.hitl import GateRoutingResult, HITLRoutingGate
 from backend.github.client import GitHubClient
 from backend.github.poster import GitHubPRPoster
@@ -30,6 +31,10 @@ class ReviewSummary(BaseModel):
     status: str
     diff_source: Literal["webhook", "github_api"]
     diff_bytes: int = 0
+    diff_bytes_total: int = 0
+    diff_truncated: bool = False
+    reviewed_files: int = 0
+    skipped_files: int = 0
     changed_files: int = 0
     findings_count: int = 0
     auto_posted: int = 0
@@ -90,6 +95,13 @@ class ReviewPipeline:
                 f"PR {job.repo}#{job.pr_number} has no diff to review"
             )
 
+        selection = select_reviewable_diff(
+            diff,
+            max_bytes=self.settings.MAX_REVIEW_DIFF_BYTES,
+            max_file_bytes=self.settings.MAX_REVIEW_FILE_BYTES,
+        )
+        review_diff = selection.diff or diff
+
         context = WorkflowContext(
             delivery_id=job.delivery_id,
             trace_id=job.trace_id,
@@ -97,7 +109,7 @@ class ReviewPipeline:
             pr_number=job.pr_number,
             commit_sha=commit_sha,
             is_public=is_public,
-            diff=diff,
+            diff=review_diff,
             changed_files=changed_files,
             metadata=job.metadata,
         )
@@ -141,7 +153,11 @@ class ReviewPipeline:
             commit_sha=commit_sha,
             status=status,
             diff_source=diff_source,
-            diff_bytes=len(diff.encode("utf-8")),
+            diff_bytes=len(review_diff.encode("utf-8")),
+            diff_bytes_total=len(diff.encode("utf-8")),
+            diff_truncated=selection.truncated,
+            reviewed_files=len(selection.included_files) or len(changed_files),
+            skipped_files=len(selection.excluded_files),
             changed_files=len(changed_files),
             findings_count=len(state.aggregated_findings),
             auto_posted=len(routing.auto_post_findings),
@@ -161,6 +177,11 @@ class ReviewPipeline:
                     "repo": job.repo,
                     "pr_number": job.pr_number,
                     "diff_source": diff_source,
+                    "diff_bytes_total": summary.diff_bytes_total,
+                    "diff_bytes_reviewed": summary.diff_bytes,
+                    "diff_truncated": summary.diff_truncated,
+                    "reviewed_files": summary.reviewed_files,
+                    "skipped_files": summary.skipped_files,
                     "findings": summary.findings_count,
                     "posted": summary.auto_posted,
                     "hitl": summary.hitl_escalated,

@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     GITHUB_API_BASE_URL: str = Field(default="https://api.github.com")
     GITHUB_TIMEOUT_SECONDS: float = Field(default=30.0, gt=0.0)
 
+    # Diff budget for specialists. Large/vendored chunks are filtered first.
+    MAX_REVIEW_DIFF_BYTES: int = Field(default=120_000, gt=0)
+    MAX_REVIEW_FILE_BYTES: int = Field(default=40_000, gt=0)
+
     # Unified Data Spine (Tiger Cloud / TimescaleDB + pgvectorscale)
     TIGER_DATABASE_URL: str = Field(
         default="postgresql://user:password@localhost:5432/tsdb?sslmode=disable"
@@ -69,7 +73,7 @@ class Settings(BaseSettings):
     # Autonomy, Selectivity & Economics Guards
     CONFIDENCE_THRESHOLD: float = Field(default=0.75, ge=0.0, le=1.0)
     DAILY_BUDGET_USD: float = Field(default=10.00, gt=0.0)
-    NODE_TIMEOUT_SECONDS: float = Field(default=30.0, gt=0.0)
+    NODE_TIMEOUT_SECONDS: float = Field(default=60.0, gt=0.0)
 
     @field_validator("GITHUB_WEBHOOK_SECRET")
     @classmethod

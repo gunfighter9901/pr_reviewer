@@ -13,7 +13,7 @@ The result is faster reviews, less reviewer fatigue, and responsible automation 
 1. **GitHub sends a webhook** when a pull request is opened, reopened, or updated.
 2. **The ingress verifies the signature** and enqueues a job in Redis. Duplicate deliveries are ignored.
 3. **The worker fetches the PR diff** from the GitHub API using `GITHUB_TOKEN`.
-4. **Four specialists analyze the added lines** — security, quality, testing, and docs — and the aggregator keeps only grounded, deduplicated findings.
+4. **Four specialists analyze the added lines** — security, quality, testing, and docs. Large/vendored files are filtered first; if Gemini is unavailable, deterministic rules keep the review running. The aggregator keeps only grounded, deduplicated findings.
 5. **The routing gate decides**: high-confidence findings are posted to the PR, low-confidence findings go to the HITL queue, and critical security findings are never posted publicly.
 6. **The GitHub poster writes the comments** and the event/finding history is stored in the local spine.
 
@@ -87,6 +87,15 @@ GEMINI_MODEL_FAST=gemini-3.5-flash-lite
 
 The default `LLM_PROVIDER=deterministic` is fully offline and is what the tests and golden evals use.
 
+Large or vendored PRs are bounded before reaching the specialists. Source files are prioritized, and lockfiles, bundles, source maps, and binaries are skipped:
+
+```ini
+MAX_REVIEW_DIFF_BYTES=120000
+MAX_REVIEW_FILE_BYTES=40000
+```
+
+If Gemini returns `429`, `503`, or times out, the specialist falls back to its deterministic rules instead of dropping the review. The run summary reports `diff_truncated`, `reviewed_files`, and `skipped_files`.
+
 ### 3. Review an existing PR without a webhook
 
 This is the fastest way to verify the whole path against your repository:
@@ -158,18 +167,43 @@ https://your-domain.example/webhooks/github
 
 as the GitHub payload URL.
 
-#### Render / Railway / Fly.io
+#### Render (Blueprint included)
 
-Deploy the repository as **two services** plus a Redis instance:
+The repository includes `render.yaml`, which defines:
 
-| Service | Command |
-|---|---|
-| Ingress (public HTTPS) | `uvicorn backend.webhook.app:app --host 0.0.0.0 --port $PORT` |
-| Worker (background) | `arq backend.worker.WorkerSettings` |
+| Resource | Type | Purpose |
+|---|---|---|
+| `pr-reviewer-redis` | Key Value (free) | ARQ queue + delivery deduplication |
+| `pr-reviewer-ingress` | Docker web service | Public HTTPS webhook endpoint |
+| `pr-reviewer-worker` | Docker background worker | Diff fetch, specialists, routing, posting |
 
-Give both services the same environment variables, especially `REDIS_URL`, `QUEUE_BACKEND=redis`, `GITHUB_WEBHOOK_SECRET`, `GITHUB_TOKEN`, and the Gemini settings. If the platform provides a persistent disk, set `SPINE_SQLITE_PATH` to a path on that disk.
+1. Push the branch that contains `render.yaml` (for example `feat/gemini-provider`).
+2. In the Render Dashboard, choose **New → Blueprint**, connect `gunfighter9901/pr_reviewer`, and select that branch.
+3. Render prompts for the `sync: false` secrets: `GITHUB_WEBHOOK_SECRET`, `GITHUB_TOKEN`, and `GEMINI_API_KEY`. Use the **same webhook secret** as your local `.env`.
+4. Apply the Blueprint and wait for both services to deploy.
+5. Open `https://<your-ingress>.onrender.com/health`. A healthy response looks like:
 
-Use the ingress service's public HTTPS URL as the GitHub webhook payload URL. The worker does not need a public URL.
+   ```json
+   {"status":"ok","queue_backend":"redis","github_token_configured":true}
+   ```
+
+6. In GitHub, open the repository's **Settings → Webhooks → Add webhook**:
+   - **Payload URL:** `https://<your-ingress>.onrender.com/webhooks/github`
+   - **Content type:** `application/json`
+   - **Secret:** the `GITHUB_WEBHOOK_SECRET` value
+   - **Events:** **Pull requests** only
+   - **Active:** checked
+
+7. Open or update a PR. The ingress returns `202` with `{"status":"queued"}`; the worker fetches the diff and posts eligible findings. Follow progress in the Render **Logs** tab for the worker.
+
+Plan notes:
+
+- The worker requires a paid plan and a 1 GB disk (already configured) so findings/HITL history survive deploys.
+- The ingress defaults to `free`. Free web services spin down when idle, which can make GitHub webhook deliveries time out; switch it to `starter` for a reliable production endpoint.
+- Free Key Value has no persistence. Use the `256mb` plan for production so queued jobs survive restarts.
+- If you deploy from `feat/gemini-provider`, the services track that branch. After merging to `main`, change each service's branch in Render (or re-apply the Blueprint from `main`).
+
+Railway and Fly.io work the same way: run the ingress and worker as two services sharing one Redis URL, and use the ingress's HTTPS URL as the GitHub payload URL.
 
 ## Tests and Evals
 
@@ -207,10 +241,13 @@ Open `http://localhost:3000` for the HITL queue, trace viewer, and cost dashboar
 | Symptom | Likely cause / fix |
 |---|---|
 | `401 Bad credentials` or `403` from GitHub | `GITHUB_TOKEN` is missing, expired, or lacks Pull requests/Contents permissions. |
-| Webhook returns `401 unauthorized` | `GITHUB_WEBHOOK_SECRET` does not match the secret in GitHub's webhook settings. |
+| Webhook returns `401`/`403 unauthorized` | `GITHUB_WEBHOOK_SECRET` does not match the secret in GitHub's webhook settings. |
 | Webhook returns `202 ignored` | The event is not `pull_request`, or the action is not `opened`/`synchronize`/`reopened`. |
-| Webhook returns `202 queued` but nothing happens | Ingress and worker must use the same `REDIS_URL` and `QUEUE_BACKEND=redis`; check the worker logs. |
-| No comments on the PR | No finding passed grounding/confidence routing. Run `python -m backend.cli review ... --no-post` to inspect the summary. |
+| Webhook returns `202 queued` but nothing happens | Ingress and worker must use the same `REDIS_URL` and `QUEUE_BACKEND=redis`; check the worker logs. On Render, confirm the worker service is running and the ingress's `REDIS_URL` points at the Key Value instance. |
+| No comments on the PR | No finding passed grounding/confidence routing, or findings were routed to HITL/private alerts. Run `python -m backend.cli review ... --no-post` and inspect `findings_count`, `hitl_escalated`, and `private_security_alerts`. |
+| `Gemini API returned HTTP 429/503` in logs | Gemini quota or availability issue. The review falls back to deterministic rules; restore quota or set `LLM_PROVIDER=deterministic` for a fully offline run. |
+| `diff_truncated: true` or only some files reviewed | The PR exceeded `MAX_REVIEW_DIFF_BYTES`/`MAX_REVIEW_FILE_BYTES`. Raise the limits or review in smaller PRs; vendored/generated files are intentionally skipped. |
+| Render free webhook times out | Free web services spin down when idle. Upgrade the ingress to `starter`, or trigger a wake-up request before sending a test PR. |
 | Inline comment fails with `422` | The line is not part of the diff; the poster automatically falls back to a PR conversation comment. |
 | `GITHUB_TOKEN is missing or still a placeholder` | Replace `ghp_fallback_personal_access_token` in `.env` with a real token. |
 
