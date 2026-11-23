@@ -167,6 +167,44 @@ async def test_pipeline_uses_webhook_diff_without_github_fetch() -> None:
 
 
 @pytest.mark.asyncio
+async def test_pipeline_comment_carries_specialist_summaries_and_verdict() -> None:
+    """The posted markdown must report each sub-agent's summary plus the aggregator's own verdict."""
+    spine = TigerDataSpine(settings=Settings(_env_file=None, SPINE_SQLITE_PATH=":memory:"))
+
+    class NodeEngine(StubEngine):
+        async def run(self, context: WorkflowContext) -> WorkflowState:
+            nodes = {
+                "security": [_finding()],
+                "quality": [],
+                "testing": [],
+                "docs": [],
+            }
+            return WorkflowState(
+                delivery_id=context.delivery_id,
+                trace_id=context.trace_id,
+                status="completed",
+                completed_nodes=nodes,
+                aggregated_findings=[_finding()],
+            )
+
+    pipeline, _ = _pipeline(
+        NodeEngine([_finding()]),
+        StubGitHubClient(PullRequestBundle("acme/demo", 7, "abc123", DIFF, ["app/db.py"])),
+        spine=spine,
+    )
+
+    summary = await pipeline.process(_job(diff=DIFF), post_comments=False)
+
+    assert summary.status == "auto_posted"
+    assert "### Sub-agent analysis" in summary.pr_summary_markdown
+    assert "- **Security**" in summary.pr_summary_markdown
+    assert "Decision: findings_raised" in summary.pr_summary_markdown
+    assert "### Aggregator verdict" in summary.pr_summary_markdown
+    assert "Decision: **POST**" in summary.pr_summary_markdown
+    assert "highest severity first" in summary.pr_summary_markdown
+
+
+@pytest.mark.asyncio
 async def test_pipeline_clean_pr_silent_when_disabled() -> None:
     spine = TigerDataSpine(settings=Settings(_env_file=None, SPINE_SQLITE_PATH=":memory:"))
     engine = StubEngine([])

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional
 
 from backend.models import AgentType, Finding
 from backend.observability.events import EventSpineLogger
@@ -22,6 +22,77 @@ class DiffAddedLine:
     file_path: str
     line_number: int
     content: str
+
+
+AGENT_FOCUS: Dict[str, str] = {
+    "security": "exploits, injection, secrets, unsafe deserialization",
+    "quality": "logic bugs, null-safety, async hazards, swallowed errors",
+    "testing": "missing edge-case tests, brittle assertions",
+    "docs": "docstring drift, undocumented interfaces, stale comments",
+}
+
+
+@dataclass(frozen=True)
+class SpecialistSummary:
+    """What one specialist analyzed and its decision (consumed by SummarizerAgent)."""
+
+    agent_type: str
+    focus: str
+    lines_scanned: int
+    files_scanned: int
+    findings_count: int
+    decision: str  # "clean" | "findings_raised" | "degraded"
+    note: str
+
+
+_SEVERITY_ORDER = ("critical", "high", "medium", "low", "info")
+
+
+def build_specialist_summary(
+    agent_type: str,
+    *,
+    lines_scanned: int = 0,
+    files_scanned: int = 0,
+    findings: Optional[Iterable[Finding]] = None,
+    error: Optional[str] = None,
+) -> SpecialistSummary:
+    """Summarize a specialist's completed analysis: scope checked and decision."""
+    found = list(findings or [])
+    focus = AGENT_FOCUS.get(agent_type, "risk review")
+    if error:
+        return SpecialistSummary(
+            agent_type=agent_type,
+            focus=focus,
+            lines_scanned=lines_scanned,
+            files_scanned=files_scanned,
+            findings_count=len(found),
+            decision="degraded",
+            note=f"analysis degraded ({error}); findings below may be partial",
+        )
+    if found:
+        order = {sev: idx for idx, sev in enumerate(_SEVERITY_ORDER)}
+        top = min(found, key=lambda f: (order.get(f.severity, 99), -f.confidence))
+        return SpecialistSummary(
+            agent_type=agent_type,
+            focus=focus,
+            lines_scanned=lines_scanned,
+            files_scanned=files_scanned,
+            findings_count=len(found),
+            decision="findings_raised",
+            note=(
+                f"{len(found)} finding(s) raised, highest severity {top.severity} "
+                f"({top.category} at {top.file_path}:{top.line_start})"
+            ),
+        )
+    return SpecialistSummary(
+        agent_type=agent_type,
+        focus=focus,
+        lines_scanned=lines_scanned,
+        files_scanned=files_scanned,
+        findings_count=0,
+        decision="clean",
+        note="no issues found",
+    )
 
 
 def parse_unified_diff(diff_text: str, default_file: str = "unknown.py") -> List[DiffAddedLine]:

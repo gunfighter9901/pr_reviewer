@@ -4,10 +4,11 @@
 
 Drop a GitHub PR on it and get back **one structured review** — every issue ordered
 by risk and explained in plain language — instead of a spray of bot comments.
-Four specialist agents (security, quality, testing, docs) read the diff, the
-aggregator merges their results into a single verdict, a fifth balanced
-SummarizerAgent renders that verdict as one plain-language review, and a
-routing gate decides what gets posted publicly, what needs a human, and what
+Four specialist agents (security, quality, testing, docs) read the diff, each
+returning its findings plus a summary of what it analyzed and its decision.
+A fifth balanced SummarizerAgent takes those returned summaries, merges them
+into a single verdict, and adds its own decision with suggestions. A routing
+gate then decides what gets posted publicly, what needs a human, and what
 stays private. Uncertain or sensitive findings never touch the public thread.
 Clean PRs still get a short “all clear” comment by default.
 

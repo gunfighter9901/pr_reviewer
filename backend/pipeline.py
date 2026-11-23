@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 from backend.agents.summarizer import SummarizerAgent
+from backend.agents.specialists import build_specialist_summary, parse_unified_diff
 from backend.config import Settings, get_settings
 from backend.diff_utils import select_reviewable_diff
 from backend.gates.hitl import GateRoutingResult, HITLRoutingGate
@@ -132,8 +133,47 @@ class ReviewPipeline:
 
         posted: List[Dict[str, Any]] = []
         summary_markdown = ""
-        if routing.auto_post_findings:
-            # Balanced SummarizerAgent synthesis over the routed findings.
+        # Specialist summaries for the SummarizerAgent: each returned summary
+        # (what the sub-agent analyzed + its decision) is built from the actual
+        # engine outputs. Only agents present in the engine state are listed.
+        default_file = changed_files[0] if changed_files else "src/app.py"
+        added_line_count = len(parse_unified_diff(review_diff, default_file=default_file))
+        reviewed_file_count = len(selection.included_files) or len(changed_files)
+        specialist_summaries = [
+            build_specialist_summary(
+                _agent,
+                lines_scanned=added_line_count,
+                files_scanned=reviewed_file_count,
+                findings=state.completed_nodes.get(_agent, []),
+                error=state.node_errors.get(_agent),
+            )
+            for _agent in ("security", "quality", "testing", "docs")
+            if _agent in state.completed_nodes or _agent in state.node_errors
+        ]
+
+        if routing.hitl_escalated_findings:
+            status = "escalated_hitl"
+            aggregator_suggestion = (
+                "Human review required — see the HITL queue; "
+                "do not merge until a reviewer approves."
+            )
+        elif routing.auto_post_findings:
+            status = "auto_posted"
+            aggregator_suggestion = (
+                "Fix the posted findings, highest severity first, before merge."
+            )
+        else:
+            status = "completed"
+            aggregator_suggestion = "Safe to merge."
+
+        has_signal = bool(
+            routing.auto_post_findings
+            or routing.hitl_escalated_findings
+            or routing.private_security_alerts
+        )
+        if has_signal:
+            # Balanced SummarizerAgent synthesis: specialist summaries first,
+            # then the agent's own verdict with suggestions.
             _, summary_markdown = await self.summarizer.summarize(
                 job.repo,
                 job.pr_number,
@@ -149,6 +189,9 @@ class ReviewPipeline:
                 ),
                 trace_id=job.trace_id,
                 delivery_id=job.delivery_id,
+                specialist_summaries=specialist_summaries or None,
+                aggregator_decision=status,
+                aggregator_suggestion=aggregator_suggestion,
             )
         if post_comments and routing.auto_post_findings:
             if self.settings.POST_PR_SUMMARY_COMMENT:
@@ -177,14 +220,9 @@ class ReviewPipeline:
                     routed_findings=routing.auto_post_findings,
                     is_public_repo=is_public,
                 )
-        elif (
-            not routing.auto_post_findings
-            and not routing.hitl_escalated_findings
-            and not routing.private_security_alerts
-        ):
-            # Clean PR: the SummarizerAgent always builds the "all clear"
-            # verdict for the summary record; it is posted as a GitHub
-            # comment by default (POST_CLEAN_COMMENT) so the thread shows it.
+        elif not has_signal:
+            # Clean PR: the SummarizerAgent builds the verdict from the
+            # returned specialist summaries and posts it by default.
             _, summary_markdown = await self.summarizer.summarize(
                 job.repo,
                 job.pr_number,
@@ -192,6 +230,9 @@ class ReviewPipeline:
                 [],
                 trace_id=job.trace_id,
                 delivery_id=job.delivery_id,
+                specialist_summaries=specialist_summaries or None,
+                aggregator_decision=status,
+                aggregator_suggestion=aggregator_suggestion,
             )
             if post_comments and self.settings.POST_CLEAN_COMMENT:
                 single = await self.poster.post_pr_summary_comment(
@@ -206,13 +247,6 @@ class ReviewPipeline:
                     contains_critical_details=False,
                 )
                 posted = [single] if single is not None else []
-
-        if routing.hitl_escalated_findings:
-            status = "escalated_hitl"
-        elif routing.auto_post_findings:
-            status = "auto_posted"
-        else:
-            status = "completed"
 
         summary = ReviewSummary(
             delivery_id=job.delivery_id,
