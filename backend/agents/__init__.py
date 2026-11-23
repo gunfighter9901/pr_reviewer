@@ -1,6 +1,7 @@
 """Specialist Agents and Fan-In Aggregator package (M5)."""
 
 from backend.agents.aggregator import FindingAggregator, aggregate_and_deduplicate_findings
+from backend.agents.summarizer import SummarizerAgent
 from backend.agents.specialists import (
     DocsAgent,
     ModelRouter,
@@ -18,6 +19,7 @@ __all__ = [
     "QualityAgent",
     "SecurityAgent",
     "SpecialistAgent",
+    "SummarizerAgent",
     "TestingAgent",
     "aggregate_and_deduplicate_findings",
     "run_specialist_agent",

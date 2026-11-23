@@ -76,20 +76,24 @@ class ExplodingGitHubClient(StubGitHubClient):
 
 
 def _pipeline(
-    engine: StubEngine, client: StubGitHubClient, *, spine: TigerDataSpine
+    engine: StubEngine,
+    client: StubGitHubClient,
+    *,
+    spine: TigerDataSpine,
+    settings: Settings | None = None,
 ) -> tuple[ReviewPipeline, List[Dict[str, Any]]]:
-    settings = Settings(_env_file=None, SPINE_SQLITE_PATH=":memory:")
-    gate = HITLRoutingGate(spine=spine, settings=settings)
+    resolved = settings or Settings(_env_file=None, SPINE_SQLITE_PATH=":memory:")
+    gate = HITLRoutingGate(spine=spine, settings=resolved)
     posted: List[Dict[str, Any]] = []
 
     async def transport(payload: Dict[str, Any]) -> Dict[str, Any]:
         posted.append(payload)
         return {"id": f"comment-{len(posted)}", **payload}
 
-    poster = GitHubPRPoster(transport=transport)
+    poster = GitHubPRPoster(transport=transport, summary_transport=transport)
     return (
         ReviewPipeline(
-            settings=settings,
+            settings=resolved,
             engine=engine,  # type: ignore[arg-type]
             gate=gate,
             poster=poster,
@@ -154,8 +158,33 @@ async def test_pipeline_uses_webhook_diff_without_github_fetch() -> None:
 
     assert summary.diff_source == "webhook"
     assert summary.status == "completed"
-    assert posted == []
+    # Clean-PR default: an "all clear" summary comment is posted.
+    assert len(posted) == 1
+    assert "PR Review" in posted[0]["body"]
+    assert "Safe to merge" in posted[0]["body"]
+    assert "Safe to merge" in summary.pr_summary_markdown
     assert engine.contexts[0].diff == DIFF
+
+
+@pytest.mark.asyncio
+async def test_pipeline_clean_pr_silent_when_disabled() -> None:
+    spine = TigerDataSpine(settings=Settings(_env_file=None, SPINE_SQLITE_PATH=":memory:"))
+    engine = StubEngine([])
+    client = ExplodingGitHubClient(
+        PullRequestBundle("acme/demo", 7, "abc123", DIFF, ["app/db.py"])
+    )
+    settings = Settings(
+        _env_file=None, SPINE_SQLITE_PATH=":memory:", POST_CLEAN_COMMENT=False
+    )
+    pipeline, posted = _pipeline(engine, client, spine=spine, settings=settings)
+
+    summary = await pipeline.process(_job(diff=DIFF))
+
+    assert summary.diff_source == "webhook"
+    assert summary.status == "completed"
+    assert posted == []
+    # Agent still builds the verdict for the record; posting is disabled.
+    assert "Safe to merge" in summary.pr_summary_markdown
 
 
 @pytest.mark.asyncio

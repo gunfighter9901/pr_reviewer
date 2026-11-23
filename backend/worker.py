@@ -7,7 +7,8 @@ from typing import Any, Dict, List, Optional
 import fakeredis.aioredis
 from arq.connections import RedisSettings
 
-from backend.agents.llm import build_specialist_runner
+from backend.agents.llm import build_specialist_runner, build_specialist_runtime
+from backend.agents.summarizer import SummarizerAgent
 from backend.config import Settings, get_settings
 from backend.db.spine import TigerDataSpine
 from backend.gates.hitl import HITLRoutingGate
@@ -109,6 +110,10 @@ def build_review_pipeline(settings: Optional[Settings] = None) -> ReviewPipeline
         summary_transport=GitHubSummaryTransport(github_client),
         event_logger=event_logger,
     )
+    summarizer = SummarizerAgent(
+        model_router=build_specialist_runtime(cfg).model_router,
+        event_logger=event_logger,
+    )
     return ReviewPipeline(
         settings=cfg,
         engine=engine,
@@ -117,6 +122,7 @@ def build_review_pipeline(settings: Optional[Settings] = None) -> ReviewPipeline
         github_client=github_client,
         event_logger=event_logger,
         redis_client=redis_client,
+        summarizer=summarizer,
     )
 
 
@@ -134,13 +140,16 @@ async def process_pr_review_task(
     job = QueuedPRJob.model_validate(job_payload)
     job_id = str(ctx.get("job_id") or f"pr-review:{job.delivery_id}")
     pool = ctx.get("redis")
+    # Dashboard/Redis default: run the full review and auto-post eligible
+    # findings. Metadata post_comments=False opts into a dry run instead.
+    post_comments = bool((job.metadata or {}).get("post_comments", True))
     if pool is not None:
         try:
             await update_index_entry(pool, job_id, status="processing")
         except Exception:  # noqa: BLE001 - index is observability, not the review path
             pass
     try:
-        summary = await pipeline.process(job)
+        summary = await pipeline.process(job, post_comments=post_comments)
     except Exception as exc:  # noqa: BLE001 - record failure, then let ARQ retry
         if pool is not None:
             try:

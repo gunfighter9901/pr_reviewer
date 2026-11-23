@@ -5,9 +5,11 @@
 Drop a GitHub PR on it and get back **one structured review** — every issue ordered
 by risk and explained in plain language — instead of a spray of bot comments.
 Four specialist agents (security, quality, testing, docs) read the diff, the
-aggregator merges their results into a single verdict, and a routing gate decides
-what gets posted publicly, what needs a human, and what stays private. Uncertain
-or sensitive findings never touch the public thread.
+aggregator merges their results into a single verdict, a fifth balanced
+SummarizerAgent renders that verdict as one plain-language review, and a
+routing gate decides what gets posted publicly, what needs a human, and what
+stays private. Uncertain or sensitive findings never touch the public thread.
+Clean PRs still get a short “all clear” comment by default.
 
 ## How it works
 
@@ -80,7 +82,7 @@ The technical version of this map (modules, tests, verified behavior) lives in
 | `backend/webhook/` | FastAPI ingress: webhook receiver, HMAC security, ARQ queue adapter, dashboard REST API |
 | `backend/worker.py` | ARQ background worker: builds the pipeline, runs queued PR reviews |
 | `backend/pipeline.py` | Review pipeline: diff → specialists → aggregator → HITL gate → poster |
-| `backend/agents/` | 4 specialists (security, quality, testing, docs), aggregator + single-PR summarizer |
+| `backend/agents/` | 4 specialists (security, quality, testing, docs) + balanced SummarizerAgent, aggregator + single-PR summarizer |
 | `backend/orchestrator/` | Workflow engine + LangGraph fan-out adapter |
 | `backend/gates/` | HITL routing gate + feedback-decay engine |
 | `backend/github/` | GitHub API client + idempotent PR poster (inline + single-summary) |
@@ -96,7 +98,7 @@ The technical version of this map (modules, tests, verified behavior) lives in
 ## Features
 
 - **Single-comment reviews** — one risk-ordered, plain-language summary per PR.
-- **Selectivity first** — only grounded, deduplicated findings; clean PRs get zero comments.
+- **Selectivity first** — only grounded, deduplicated findings; clean PRs get a short “all clear” comment by default (`POST_CLEAN_COMMENT=false` for silent clean PRs).
 - **Safety by construction** — critical findings are never posted to public PRs.
 - **Human-in-the-loop** — approve / reject decisions persist and calibrate future sensitivity.
 - **Live dashboard** — PR cards, review history, trace viewer, Redis queue with manual trigger.
@@ -213,8 +215,9 @@ entirely: no `redis-server` needed.
 | `http://localhost:8000/webhooks/github` | GitHub webhook URL (repo Settings → Webhooks → Pull requests) |
 
 Key knobs in `.env`: `LLM_PROVIDER=deterministic|gemini`, `POST_PR_SUMMARY_COMMENT=true`
-(one comment) or unset (inline comments), `CONFIDENCE_THRESHOLD=0.75`,
-`MAX_REVIEW_DIFF_BYTES=120000`. API: `GET /api/stats|hitl|pr-summaries|reviews|traces|queue`,
+(one comment) or unset (inline comments), `POST_CLEAN_COMMENT=true` (default: clean
+PRs get an “all clear” comment; `false` restores silent clean PRs),
+`CONFIDENCE_THRESHOLD=0.75`, `MAX_REVIEW_DIFF_BYTES=120000`. API: `GET /api/stats|hitl|pr-summaries|reviews|traces|queue`,
 `POST /api/hitl/{id}/decision`, `POST /api/queue/trigger`.
 
 ## Verify

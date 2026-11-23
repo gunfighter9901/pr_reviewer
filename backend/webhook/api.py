@@ -43,6 +43,10 @@ class TriggerRequest(BaseModel):
     repo: str = Field(description="owner/name")
     pr_number: int = Field(gt=0)
     delivery_id: Optional[str] = None
+    # When a Redis queue is configured, dashboard triggers default to a full
+    # run: worker fetches the diff, reviews, and auto-posts eligible findings.
+    # Set false for a dry run (analyze + persist only, post nothing).
+    auto_post: bool = Field(default=True)
 
 
 class DecisionRequest(BaseModel):
@@ -398,7 +402,7 @@ def register_api_routes(app: FastAPI) -> None:
             is_public=True,
             diff="",
             changed_files=[],
-            metadata={"source": "dashboard-trigger"},
+            metadata={"source": "dashboard-trigger", "post_comments": bool(body.auto_post)},
         )
         queue = _queue(request)
         try:
@@ -420,4 +424,5 @@ def register_api_routes(app: FastAPI) -> None:
             "delivery_id": delivery_id,
             "repo": repo,
             "pr_number": int(body.pr_number),
+            "auto_post": bool(body.auto_post),
         }

@@ -79,6 +79,11 @@ class Settings(BaseSettings):
     # conversation comment instead of one inline comment per finding.
     POST_PR_SUMMARY_COMMENT: bool = Field(default=False)
 
+    # Clean-PR comment: even when a PR has zero findings, post a short
+    # "all clear" summary comment so the PR thread always shows a verdict.
+    # Set false to restore the old selectivity-first behavior (clean = silent).
+    POST_CLEAN_COMMENT: bool = Field(default=True)
+
     @field_validator("GITHUB_WEBHOOK_SECRET")
     @classmethod
     def _validate_non_blank_secret(cls, value: str) -> str:

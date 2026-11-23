@@ -102,6 +102,7 @@ class ModelRouter:
             "quality": high_model,
             "testing": fast_model,
             "docs": fast_model,
+            "summarizer": high_model,
         }
         return cls(overrides=overrides, tiers=tiers, default_model=fast_model)
 

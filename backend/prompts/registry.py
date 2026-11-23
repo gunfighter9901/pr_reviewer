@@ -105,6 +105,21 @@ DEFAULT_PROMPTS: tuple[PromptTemplate, ...] = (
             "Diff:\n{diff}"
         ),
     ),
+    PromptTemplate(
+        agent_type="summarizer",
+        version="v1.0.0",
+        system_prompt=(
+            "You are SummarizerAgent, the balanced fan-in synthesizer for four specialists "
+            "(security, quality, testing, docs). Represent every specialist fairly: order points "
+            "by risk (critical first), keep each point to one plain sentence plus its evidence, "
+            "never invent files, lines, or fixes, and never drop a routed finding. "
+            "When there are zero findings, return the all-clear verdict."
+        ),
+        user_template=(
+            "Repository: {repo} (PR #{pr_number})\n"
+            "Findings by specialist (already risk-ordered):\n{diff}"
+        ),
+    ),
 )
 
 

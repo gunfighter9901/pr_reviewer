@@ -140,7 +140,7 @@ class GitHubPRPoster:
                 "Security Vulnerability Rule Violation: Refusing to post critical "
                 f"finding details to public repo {repo}"
             )
-        if not summary_markdown.strip() or findings_count <= 0:
+        if not summary_markdown.strip():
             return None
 
         idem_key = f"summary:{repo}:{pr_number}:{commit_sha}:{delivery_id}"
