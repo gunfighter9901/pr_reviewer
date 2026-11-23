@@ -14,7 +14,7 @@
 </head>
 <body>
   <h1>project-details/implementation_notes.html — Live Status</h1>
-  <p><strong>Session Updated:</strong> 2026-11-23 | <strong>Overall Build State:</strong> M1–M8 Built &amp; Independently Verified plus live GitHub integration (65/65 Pytest, 5/5 Golden Evals, Next.js Production Build)</p>
+  <p><strong>Session Updated:</strong> 2026-11-23 | <strong>Overall Build State:</strong> M1–M8 Built &amp; Independently Verified plus live GitHub integration, single-PR summaries, live dashboard, and Redis queue control (79/79 Pytest, 5/5 Golden Evals, Next.js Production Build)</p>
 
   <h2>Milestone Status Matrix</h2>
   <table>
@@ -35,6 +35,8 @@
       <tr><td>M7: HITL Gate, GitHub Poster &amp; Reliability</td><td><span class="status done">DONE</span></td><td><code>pytest tests/test_m7_hitl.py -v</code> (3 passed)</td></tr>
       <tr><td>M8: Operational Dashboard &amp; Golden Evals</td><td><span class="status done">DONE</span></td><td><code>pytest &amp;&amp; python evals/run_evals.py &amp;&amp; npm --prefix frontend run build</code> (All passed)</td></tr>
       <tr><td>Live GitHub Integration</td><td><span class="status done">DONE</span></td><td><code>pytest tests/test_github_client.py tests/test_review_pipeline.py tests/test_webhook_queue.py tests/test_diff_selection.py tests/test_specialist_fallback.py -v</code> (24 passed); real PR fetch + review dry run verified live</td></tr>
+      <tr><td>Single-PR Summary Review</td><td><span class="status done">DONE</span></td><td><code>pytest tests/test_pr_summary.py -v</code> (9 passed); risk-ordered plain-language summaries, one-comment posting, <code>GET /api/pr-summaries</code></td></tr>
+      <tr><td>Redis Queue Control</td><td><span class="status done">DONE</span></td><td><code>pytest tests/test_queue_api.py -v</code> (5 passed); <code>GET /api/queue</code> + <code>POST /api/queue/trigger</code> drove a live dashboard-triggered review end to end</td></tr>
     </tbody>
   </table>
 
@@ -51,7 +53,7 @@
   <ul>
     <li><strong>GitHub live API:</strong> a real fine-grained PAT is configured and live PR fetches/reviews succeed. Public comment posting was not exercised because the selected PR's findings were all routed to HITL/private alerts; the poster path remains covered by mocked payload tests.</li>
     <li><strong>Runtime persistence:</strong> <code>TigerDataSpine</code> uses SQLite, not the Tiger Cloud Postgres URL. The live Tiger schema, <code>vector(1536)</code>, hypertable, indexes, continuous aggregates, and nearest-neighbour query were verified directly; Postgres is not yet the runtime backend.</li>
-    <li><strong>Hosting:</strong> <code>render.yaml</code> is committed for Render (Key Value + public ingress + worker + disk). The Blueprint still needs to be applied in the user's Render account, then the GitHub webhook URL must point at the ingress. Docker is not installed locally, so Compose image builds were not run.</li>
+    <li><strong>Hosting:</strong> local run (uvicorn ingress + ARQ worker + Next.js dashboard). The GitHub webhook URL must point at a public address tunneled to the ingress.</li>
   </ul>
 </body>
 </html>

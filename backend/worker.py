@@ -11,7 +11,7 @@ from backend.agents.llm import build_specialist_runner
 from backend.config import Settings, get_settings
 from backend.db.spine import TigerDataSpine
 from backend.gates.hitl import HITLRoutingGate
-from backend.github.client import GitHubClient, GitHubReviewTransport
+from backend.github.client import GitHubClient, GitHubReviewTransport, GitHubSummaryTransport
 from backend.github.poster import GitHubPRPoster
 from backend.models import QueuedPRJob
 from backend.observability.events import EventSpineLogger
@@ -106,6 +106,7 @@ def build_review_pipeline(settings: Optional[Settings] = None) -> ReviewPipeline
     gate = HITLRoutingGate(spine=spine, settings=cfg, event_logger=event_logger)
     poster = GitHubPRPoster(
         transport=GitHubReviewTransport(github_client),
+        summary_transport=GitHubSummaryTransport(github_client),
         event_logger=event_logger,
     )
     return ReviewPipeline(
@@ -123,13 +124,45 @@ async def process_pr_review_task(
     ctx: Dict[str, Any], job_payload: Dict[str, Any]
 ) -> Dict[str, Any]:
     """ARQ task entrypoint: build/reuse the pipeline, fetch the diff, review, and post."""
+    from backend.webhook.queue import update_index_entry
+
     pipeline: Optional[ReviewPipeline] = ctx.get("review_pipeline")
     if pipeline is None:
         pipeline = build_review_pipeline()
         ctx["review_pipeline"] = pipeline
 
     job = QueuedPRJob.model_validate(job_payload)
-    summary = await pipeline.process(job)
+    job_id = str(ctx.get("job_id") or f"pr-review:{job.delivery_id}")
+    pool = ctx.get("redis")
+    if pool is not None:
+        try:
+            await update_index_entry(pool, job_id, status="processing")
+        except Exception:  # noqa: BLE001 - index is observability, not the review path
+            pass
+    try:
+        summary = await pipeline.process(job)
+    except Exception as exc:  # noqa: BLE001 - record failure, then let ARQ retry
+        if pool is not None:
+            try:
+                await update_index_entry(
+                    pool, job_id, status="failed", error=f"{exc.__class__.__name__}: {str(exc)[:200]}"
+                )
+            except Exception:  # noqa: BLE001 - index is observability, not the review path
+                pass
+        raise
+    if pool is not None:
+        try:
+            await update_index_entry(
+                pool,
+                job_id,
+                status="done",
+                findings_count=summary.findings_count,
+                auto_posted=summary.auto_posted,
+                hitl_escalated=summary.hitl_escalated,
+                private_security_alerts=summary.private_security_alerts,
+            )
+        except Exception:  # noqa: BLE001 - index is observability, not the review path
+            pass
     return summary.model_dump(mode="json")
 
 

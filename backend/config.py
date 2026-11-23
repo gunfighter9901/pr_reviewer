@@ -75,6 +75,10 @@ class Settings(BaseSettings):
     DAILY_BUDGET_USD: float = Field(default=10.00, gt=0.0)
     NODE_TIMEOUT_SECONDS: float = Field(default=60.0, gt=0.0)
 
+    # Single-PR summary comment: post the whole review as one structured
+    # conversation comment instead of one inline comment per finding.
+    POST_PR_SUMMARY_COMMENT: bool = Field(default=False)
+
     @field_validator("GITHUB_WEBHOOK_SECRET")
     @classmethod
     def _validate_non_blank_secret(cls, value: str) -> str:

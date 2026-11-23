@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from backend.agents.aggregator import render_pr_summary_markdown, summarize_pr_findings
 from backend.config import Settings, get_settings
 from backend.diff_utils import select_reviewable_diff
 from backend.gates.hitl import GateRoutingResult, HITLRoutingGate
@@ -41,6 +42,7 @@ class ReviewSummary(BaseModel):
     hitl_escalated: int = 0
     private_security_alerts: int = 0
     posted_comments: List[Dict[str, Any]] = Field(default_factory=list)
+    pr_summary_markdown: str = ""
 
 
 class ReviewPipeline:
@@ -127,16 +129,52 @@ class ReviewPipeline:
         )
 
         posted: List[Dict[str, Any]] = []
-        if post_comments and routing.auto_post_findings:
-            posted = await self.poster.post_routed_findings(
-                delivery_id=job.delivery_id,
-                trace_id=job.trace_id,
-                repo=job.repo,
-                pr_number=job.pr_number,
-                commit_sha=commit_sha,
-                routed_findings=routing.auto_post_findings,
-                is_public_repo=is_public,
+        summary_markdown = ""
+        if routing.auto_post_findings:
+            summary = summarize_pr_findings(
+                job.repo,
+                job.pr_number,
+                commit_sha,
+                [rf.finding for rf in routing.auto_post_findings],
             )
+            summary_markdown = render_pr_summary_markdown(
+                summary,
+                withheld_private=len(routing.private_security_alerts),
+                withheld_hitl=len(
+                    [
+                        rf
+                        for rf in routing.hitl_escalated_findings
+                        if not rf.private_security_alert
+                    ]
+                ),
+            )
+        if post_comments and routing.auto_post_findings:
+            if self.settings.POST_PR_SUMMARY_COMMENT:
+                single = await self.poster.post_pr_summary_comment(
+                    delivery_id=job.delivery_id,
+                    trace_id=job.trace_id,
+                    repo=job.repo,
+                    pr_number=job.pr_number,
+                    commit_sha=commit_sha,
+                    summary_markdown=summary_markdown,
+                    findings_count=len(routing.auto_post_findings),
+                    is_public_repo=is_public,
+                    contains_critical_details=any(
+                        rf.finding.severity == "critical"
+                        for rf in routing.auto_post_findings
+                    ),
+                )
+                posted = [single] if single is not None else []
+            else:
+                posted = await self.poster.post_routed_findings(
+                    delivery_id=job.delivery_id,
+                    trace_id=job.trace_id,
+                    repo=job.repo,
+                    pr_number=job.pr_number,
+                    commit_sha=commit_sha,
+                    routed_findings=routing.auto_post_findings,
+                    is_public_repo=is_public,
+                )
 
         if routing.hitl_escalated_findings:
             status = "escalated_hitl"
@@ -164,6 +202,7 @@ class ReviewPipeline:
             hitl_escalated=len(routing.hitl_escalated_findings),
             private_security_alerts=len(routing.private_security_alerts),
             posted_comments=posted,
+            pr_summary_markdown=summary_markdown,
         )
 
         if self.event_logger is not None:

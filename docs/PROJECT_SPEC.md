@@ -28,7 +28,7 @@ We use a **Modular Monolith** pattern separating stateless ingestion from asynch
   * **Model Routing:** Tiered routing per agent concern. The implemented live provider is Gemini (`LLM_PROVIDER=gemini`): Security/Quality use `gemini-3.6-flash`, Testing/Docs use `gemini-3.5-flash-lite`. Deterministic regex analyzers remain the default offline path for tests and golden evals.
   * **Embeddings:** Deterministic feature hashing is the default offline path. `EMBEDDING_PROVIDER=gemini` enables Gemini Embedding 2 (`gemini-embedding-2`) with `output_dimensionality=EMBEDDING_DIM`. Strict invariant: `.env` `EMBEDDING_DIM` **must** match the PostgreSQL `vector(N)` column definition (`vector(1536)` in the committed migration).
 * **Frontend Dashboard:** **Next.js (App Router, TypeScript, Tailwind CSS)** — Minimal, high-signal operational UI featuring the Human-in-the-Loop (HITL) Approval Queue, End-to-End Trace Viewer, and LLM Cost/Economics Dashboard.
-* **Deployment:** Docker Compose (local dev) & Railway (production).
+* **Deployment:** local run (uvicorn ingress + ARQ worker + Next.js dashboard; Redis only for webhook mode).
 
 ---
 
@@ -151,7 +151,6 @@ Maintain this clean modular directory structure:
 ```text
 ├── AGENTS.md
 ├── .env.example
-├── docker-compose.yml
 ├── pyproject.toml / requirements.txt
 ├── project-details/
 │   ├── done.html

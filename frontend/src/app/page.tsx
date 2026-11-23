@@ -1,588 +1,361 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 
-export interface FindingContract {
-  id: string;
-  feedback_id: string;
-  delivery_id: string;
-  repo: string;
-  pr_number: number;
-  agent_type: "security" | "quality" | "testing" | "docs";
-  severity: "critical" | "high" | "medium" | "low" | "info";
-  category: string;
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+type SummaryPoint = {
   file_path: string;
   line_start: number;
   line_end: number;
-  evidence_snippet: string;
-  rationale: string;
-  suggested_fix?: string;
+  severity: string;
+  category: string;
+  agent_type: string;
   confidence: number;
-  prompt_version: string;
-  routing_decision: "auto_post" | "hitl_escalate" | "private_security_alert";
-  private_alert: boolean;
-  reviewer_action: "pending" | "approved" | "edited" | "rejected_false_positive";
-  decay_weight: number;
-  evidence_count: number;
+  plain_summary: string;
+  evidence_snippet: string;
+  suggested_fix?: string | null;
+  feedback_id: string | null;
+  reviewer_action: string;
+};
+
+type PRSummary = {
+  repo: string;
+  pr_number: number;
+  risk_level: string;
+  headline: string;
+  total_points: number;
+  severity_counts: Record<string, number>;
+  points: SummaryPoint[];
+  markdown: string;
+};
+
+type QueueItem = {
+  job_id: string;
+  delivery_id: string | null;
+  repo: string | null;
+  pr_number: number | null;
+  status: string;
+  source: string;
+  in_arq_queue: boolean;
+  enqueued_at: string | null;
+  updated_at: string | null;
+  findings_count?: number | null;
+  auto_posted?: number | null;
+  error?: string | null;
+};
+
+type Stats = {
+  pending_hitl: number;
+  private_pending: number;
+  reviews: number;
+  findings: number;
+  spend_24h_usd: number;
+  daily_budget_usd: number;
+  confidence_threshold: number;
+  spine_path: string;
+};
+
+async function getJSON<T>(path: string): Promise<T> {
+  const res = await fetch(`${API}${path}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`${path} → HTTP ${res.status}`);
+  return res.json() as Promise<T>;
 }
 
-export interface TraceSpan {
-  time: string;
-  trace_id: string;
-  delivery_id: string;
-  agent_name: string;
-  event_type: string;
-  model: string;
-  prompt_version: string;
-  tokens_in: number;
-  tokens_out: number;
-  cost_usd: number;
-  latency_ms: number;
-  status: "ok" | "error" | "rejected";
-}
+const RISK_STYLE: Record<string, string> = {
+  critical: "bg-red-600 text-white",
+  high: "bg-orange-500/20 text-orange-300",
+  medium: "bg-amber-500/20 text-amber-300",
+  low: "bg-slate-700 text-slate-200",
+  info: "bg-slate-800 text-slate-400",
+};
 
-const INITIAL_HITL_QUEUE: FindingContract[] = [
-  {
-    id: "fnd-sec-001",
-    feedback_id: "hitl-901",
-    delivery_id: "deliv-gh-8821",
-    repo: "acme-corp/payment-gateway",
-    pr_number: 101,
-    agent_type: "security",
-    severity: "critical",
-    category: "sql_injection",
-    file_path: "backend/payments/query.py",
-    line_start: 16,
-    line_end: 17,
-    evidence_snippet: "sql = f\"SELECT * FROM ledger WHERE account_id = '{account_id}'\"",
-    rationale:
-      "[security] Unsanitized f-string interpolation directly into SQL query string allows arbitrary SQL injection on a public repository. Withheld from public GitHub thread per Security Vulnerability Rule.",
-    suggested_fix:
-      "cursor.execute(\"SELECT * FROM ledger WHERE account_id = $1\", (account_id,))",
-    confidence: 0.96,
-    prompt_version: "security@v1.2.0",
-    routing_decision: "private_security_alert",
-    private_alert: true,
-    reviewer_action: "pending",
-    decay_weight: 1.0,
-    evidence_count: 1,
-  },
-  {
-    id: "fnd-qual-002",
-    feedback_id: "hitl-902",
-    delivery_id: "deliv-gh-8825",
-    repo: "acme-corp/user-profile",
-    pr_number: 105,
-    agent_type: "quality",
-    severity: "medium",
-    category: "null_dereference",
-    file_path: "src/profile/normalizer.py",
-    line_start: 10,
-    line_end: 10,
-    evidence_snippet: "return payload.get(\"display_name\").strip()",
-    rationale:
-      "Chaining .strip() directly onto dict.get() without a fallback string raises AttributeError when 'display_name' is missing. Escalated because confidence (0.68) < threshold (0.75).",
-    suggested_fix: "return (payload.get(\"display_name\") or \"\").strip()",
-    confidence: 0.68,
-    prompt_version: "quality@v1.2.0",
-    routing_decision: "hitl_escalate",
-    private_alert: false,
-    reviewer_action: "pending",
-    decay_weight: 0.85,
-    evidence_count: 2,
-  },
-  {
-    id: "fnd-docs-003",
-    feedback_id: "hitl-903",
-    delivery_id: "deliv-gh-8825",
-    repo: "acme-corp/user-profile",
-    pr_number: 105,
-    agent_type: "docs",
-    severity: "info",
-    category: "untracked_todo_comment",
-    file_path: "src/profile/normalizer.py",
-    line_start: 9,
-    line_end: 9,
-    evidence_snippet: "# TODO: handle locale overrides",
-    rationale:
-      "Inline TODO comment lacks an issue tracker reference. Routed to HITL queue as confidence (0.65) < threshold (0.75).",
-    suggested_fix: "# TODO(#412): handle locale overrides",
-    confidence: 0.65,
-    prompt_version: "docs@v1.1.0",
-    routing_decision: "hitl_escalate",
-    private_alert: false,
-    reviewer_action: "pending",
-    decay_weight: 0.85,
-    evidence_count: 3,
-  },
-];
+export default function DashboardPage() {
+  const [tab, setTab] = useState<"hitl" | "queue" | "reviews" | "traces">("hitl");
+  const [filter, setFilter] = useState<"pending" | "all">("pending");
+  const [stats, setStats] = useState<Stats | null>(null);
+  const [prs, setPrs] = useState<PRSummary[]>([]);
+  const [queue, setQueue] = useState<{ items: QueueItem[]; counts?: Record<string, number> }>({ items: [] });
+  const [reviews, setReviews] = useState<any[]>([]);
+  const [traces, setTraces] = useState<any[]>([]);
+  const [triggerRepo, setTriggerRepo] = useState("");
+  const [triggerPr, setTriggerPr] = useState("");
+  const [triggerMsg, setTriggerMsg] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-const INITIAL_TRACES: TraceSpan[] = [
-  {
-    time: "2026-10-19T09:00:01.012Z",
-    trace_id: "tr-8821-a9f2",
-    delivery_id: "deliv-gh-8821",
-    agent_name: "ingress",
-    event_type: "webhook_queued",
-    model: "system",
-    prompt_version: "v1.0.0",
-    tokens_in: 0,
-    tokens_out: 0,
-    cost_usd: 0.0,
-    latency_ms: 14,
-    status: "ok",
-  },
-  {
-    time: "2026-10-19T09:00:01.068Z",
-    trace_id: "tr-8821-a9f2",
-    delivery_id: "deliv-gh-8821",
-    agent_name: "retriever",
-    event_type: "hybrid_context_retrieved",
-    model: "text-embedding-3-small",
-    prompt_version: "v1.0.0",
-    tokens_in: 420,
-    tokens_out: 0,
-    cost_usd: 0.000008,
-    latency_ms: 48,
-    status: "ok",
-  },
-  {
-    time: "2026-10-19T09:00:01.690Z",
-    trace_id: "tr-8821-a9f2",
-    delivery_id: "deliv-gh-8821",
-    agent_name: "security",
-    event_type: "specialist_llm_call",
-    model: "claude-3-5-sonnet",
-    prompt_version: "security@v1.2.0",
-    tokens_in: 1850,
-    tokens_out: 390,
-    cost_usd: 0.0114,
-    latency_ms: 612,
-    status: "ok",
-  },
-  {
-    time: "2026-10-19T09:00:01.640Z",
-    trace_id: "tr-8821-a9f2",
-    delivery_id: "deliv-gh-8821",
-    agent_name: "quality",
-    event_type: "specialist_llm_call",
-    model: "gpt-4o",
-    prompt_version: "quality@v1.2.0",
-    tokens_in: 1720,
-    tokens_out: 310,
-    cost_usd: 0.0074,
-    latency_ms: 560,
-    status: "ok",
-  },
-  {
-    time: "2026-10-19T09:00:01.410Z",
-    trace_id: "tr-8821-a9f2",
-    delivery_id: "deliv-gh-8821",
-    agent_name: "testing",
-    event_type: "specialist_llm_call",
-    model: "claude-3-5-haiku",
-    prompt_version: "testing@v1.1.0",
-    tokens_in: 1410,
-    tokens_out: 220,
-    cost_usd: 0.002008,
-    latency_ms: 335,
-    status: "ok",
-  },
-  {
-    time: "2026-10-19T09:00:01.350Z",
-    trace_id: "tr-8821-a9f2",
-    delivery_id: "deliv-gh-8821",
-    agent_name: "docs",
-    event_type: "specialist_llm_call",
-    model: "gpt-4o-mini",
-    prompt_version: "docs@v1.1.0",
-    tokens_in: 1290,
-    tokens_out: 180,
-    cost_usd: 0.000302,
-    latency_ms: 280,
-    status: "ok",
-  },
-  {
-    time: "2026-10-19T09:00:01.715Z",
-    trace_id: "tr-8821-a9f2",
-    delivery_id: "deliv-gh-8821",
-    agent_name: "aggregator",
-    event_type: "fan_in_completed",
-    model: "system",
-    prompt_version: "v1.0.0",
-    tokens_in: 0,
-    tokens_out: 0,
-    cost_usd: 0.0,
-    latency_ms: 9,
-    status: "ok",
-  },
-  {
-    time: "2026-10-19T09:00:01.730Z",
-    trace_id: "tr-8821-a9f2",
-    delivery_id: "deliv-gh-8821",
-    agent_name: "hitl_gate",
-    event_type: "gate_routing_completed",
-    model: "system",
-    prompt_version: "v1.0.0",
-    tokens_in: 0,
-    tokens_out: 0,
-    cost_usd: 0.0,
-    latency_ms: 11,
-    status: "ok",
-  },
-];
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [s, h, q, r, t] = await Promise.all([
+        getJSON<Stats>("/api/stats"),
+        getJSON<{ items: PRSummary[] }>(
+          filter === "pending"
+            ? "/api/pr-summaries?reviewer_action=pending&limit=500"
+            : "/api/pr-summaries?limit=500"
+        ),
+        getJSON<{ items: QueueItem[]; counts: Record<string, number> }>("/api/queue?limit=100"),
+        getJSON<{ items: any[] }>("/api/reviews?limit=20"),
+        getJSON<{ items: any[] }>("/api/traces?limit=100"),
+      ]);
+      setStats(s);
+      setPrs(h.items);
+      setQueue({ items: q.items, counts: q.counts });
+      setReviews(r.items);
+      setTraces(t.items);
+    } catch (e: any) {
+      setError(e?.message || "Failed to reach backend. Is uvicorn running on :8000?");
+    } finally {
+      setLoading(false);
+    }
+  }, [filter]);
 
-export default function OperationalDashboardPage() {
-  const [activeTab, setActiveTab] = useState<"hitl" | "traces" | "economics">(
-    "hitl"
-  );
-  const [hitlItems, setHitlItems] = useState<FindingContract[]>(INITIAL_HITL_QUEUE);
+  useEffect(() => {
+    load();
+  }, [load]);
 
-  const handleDecision = (
-    feedbackId: string,
-    action: "approved" | "edited" | "rejected_false_positive"
-  ) => {
-    setHitlItems((prev) =>
-      prev.map((item) => {
-        if (item.feedback_id !== feedbackId) return item;
-        const nextCount = item.evidence_count + 1;
-        const nextDecay =
-          action === "rejected_false_positive" && nextCount >= 3
-            ? Number((item.decay_weight * 0.85).toFixed(4))
-            : item.decay_weight;
-        return {
-          ...item,
-          reviewer_action: action,
-          evidence_count: nextCount,
-          decay_weight: nextDecay,
-        };
-      })
-    );
-  };
+  async function trigger() {
+    setTriggerMsg(null);
+    const pr = parseInt(triggerPr, 10);
+    if (!triggerRepo.includes("/") || !pr || pr < 1) {
+      setTriggerMsg("Enter repo as owner/name and a PR number ≥ 1.");
+      return;
+    }
+    try {
+      const res = await fetch(`${API}/api/queue/trigger`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repo: triggerRepo.trim(), pr_number: pr }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail || `HTTP ${res.status}`);
+      setTriggerMsg(`✓ ${data.status}: ${data.repo}#${data.pr_number} (${data.job_id}) — worker picks it up automatically.`);
+      setTriggerRepo("");
+      setTriggerPr("");
+    } catch (e: any) {
+      setTriggerMsg(`✗ ${e?.message || "trigger failed"}`);
+    }
+    await load();
+  }
 
-  const pendingCount = hitlItems.filter((i) => i.reviewer_action === "pending").length;
-  const privateSecurityCount = hitlItems.filter((i) => i.private_alert).length;
-  const totalSpendUsd = INITIAL_TRACES.reduce((acc, s) => acc + s.cost_usd, 0);
-  const dailyBudgetUsd = 10.0;
+  async function decide(feedbackId: string, action: string) {
+    await fetch(`${API}/api/hitl/${feedbackId}/decision`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action }),
+    });
+    await load();
+  }
 
   return (
-    <div className="mx-auto max-w-7xl px-6 py-8">
-      <header className="mb-8 flex flex-col justify-between gap-4 border-b border-slate-800 pb-6 md:flex-row md:items-center">
-        <div>
-          <div className="flex items-center gap-3">
-            <span className="rounded bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold uppercase tracking-wider text-emerald-400 ring-1 ring-emerald-500/30">
-              L0 Selectivity Over Coverage
-            </span>
-            <span className="rounded bg-blue-500/10 px-2.5 py-1 text-xs font-mono text-blue-400 ring-1 ring-blue-500/30">
-              Tiger Data Spine + LangGraph
-            </span>
-          </div>
-          <h1 className="mt-2 text-2xl font-bold tracking-tight text-white">
-            Multi-Agent PR Reviewer — Operations Dashboard
-          </h1>
-          <p className="mt-1 text-sm text-slate-400">
-            HITL Escalation Queue, Append-Only Hypertable Trace Spine, and Real-Time Token Budget Guard
-          </p>
-        </div>
-
-        <div className="grid grid-cols-3 gap-3 text-center">
-          <div className="rounded-lg border border-slate-800 bg-slate-900/70 px-4 py-2.5">
-            <div className="text-xs text-slate-400">Pending HITL</div>
-            <div className="mt-0.5 text-xl font-bold text-amber-400">{pendingCount}</div>
-          </div>
-          <div className="rounded-lg border border-red-900/50 bg-red-950/20 px-4 py-2.5">
-            <div className="text-xs text-red-300">Private Sec Alerts</div>
-            <div className="mt-0.5 text-xl font-bold text-red-400">
-              {privateSecurityCount}
-            </div>
-          </div>
-          <div className="rounded-lg border border-slate-800 bg-slate-900/70 px-4 py-2.5">
-            <div className="text-xs text-slate-400">24h Spend / Limit</div>
-            <div className="mt-0.5 text-xl font-bold text-emerald-400">
-              ${totalSpendUsd.toFixed(4)} / ${dailyBudgetUsd.toFixed(2)}
-            </div>
-          </div>
+    <div className="mx-auto max-w-6xl px-6 py-8">
+      <header className="mb-6 border-b border-slate-800 pb-4">
+        <h1 className="text-xl font-bold text-white">PR Reviewer — Live Dashboard</h1>
+        <p className="text-sm text-slate-400">
+          Backend: <span className="font-mono text-sky-400">{API}</span> · Spine:{" "}
+          <span className="font-mono">{stats?.spine_path ?? "…"}</span>
+        </p>
+        <div className="mt-3 grid grid-cols-4 gap-3 text-center">
+          <Stat label="Pending HITL" value={stats?.pending_hitl} />
+          <Stat label="Private alerts" value={stats?.private_pending} />
+          <Stat label="Reviews" value={stats?.reviews} />
+          <Stat
+            label="24h spend"
+            value={stats ? `$${stats.spend_24h_usd} / $${stats.daily_budget_usd}` : undefined}
+          />
         </div>
       </header>
 
-      <nav className="mb-6 flex gap-2 border-b border-slate-800 pb-3">
-        <button
-          onClick={() => setActiveTab("hitl")}
-          className={`rounded-md px-4 py-2 text-sm font-medium transition ${
-            activeTab === "hitl"
-              ? "bg-blue-600 text-white"
-              : "bg-slate-900 text-slate-300 hover:bg-slate-800"
-          }`}
-        >
-          1. HITL Approval &amp; Security Queue ({hitlItems.length})
-        </button>
-        <button
-          onClick={() => setActiveTab("traces")}
-          className={`rounded-md px-4 py-2 text-sm font-medium transition ${
-            activeTab === "traces"
-              ? "bg-blue-600 text-white"
-              : "bg-slate-900 text-slate-300 hover:bg-slate-800"
-          }`}
-        >
-          2. End-to-End Trace Viewer ({INITIAL_TRACES.length} Spans)
-        </button>
-        <button
-          onClick={() => setActiveTab("economics")}
-          className={`rounded-md px-4 py-2 text-sm font-medium transition ${
-            activeTab === "economics"
-              ? "bg-blue-600 text-white"
-              : "bg-slate-900 text-slate-300 hover:bg-slate-800"
-          }`}
-        >
-          3. LLM Economics &amp; Continuous Aggregates
-        </button>
-      </nav>
-
-      {activeTab === "hitl" && (
-        <section className="space-y-4">
-          {hitlItems.map((item) => (
-            <div
-              key={item.id}
-              className={`rounded-xl border p-5 ${
-                item.private_alert
-                  ? "border-red-500/40 bg-red-950/10"
-                  : "border-slate-800 bg-slate-900/60"
-              }`}
+      <div className="mb-4 flex gap-2">
+        {(["hitl", "queue", "reviews", "traces"] as const).map((t) => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={`rounded px-4 py-2 text-sm ${tab === t ? "bg-blue-600 text-white" : "bg-slate-900 text-slate-300"}`}
+          >
+            {t === "hitl" ? `PR reviews (${prs.length})` : t === "queue" ? `Queue (${queue.items.length})` : t === "reviews" ? `History (${reviews.length})` : `Traces (${traces.length})`}
+          </button>
+        ))}
+        <div className="ml-auto flex gap-2">
+          {tab === "hitl" && (
+            <select
+              value={filter}
+              onChange={(e) => setFilter(e.target.value as any)}
+              className="rounded bg-slate-900 px-2 py-2 text-sm text-slate-200"
             >
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  {item.private_alert && (
-                    <span className="rounded bg-red-600 px-2 py-0.5 text-xs font-bold uppercase text-white">
-                      Private Security Alert — Withheld From Public PR
-                    </span>
-                  )}
-                  <span className="rounded bg-slate-800 px-2 py-0.5 text-xs font-mono text-slate-200">
-                    {item.repo} #{item.pr_number}
-                  </span>
-                  <span className="rounded bg-indigo-500/20 px-2 py-0.5 text-xs font-semibold uppercase text-indigo-300">
-                    {item.agent_type}
-                  </span>
-                  <span className="rounded bg-amber-500/20 px-2 py-0.5 text-xs font-semibold uppercase text-amber-300">
-                    {item.severity} · {item.category}
-                  </span>
-                  <span className="text-xs font-mono text-slate-400">
-                    Confidence: {(item.confidence * 100).toFixed(0)}% | Prompt:{" "}
-                    {item.prompt_version}
-                  </span>
-                </div>
+              <option value="pending">pending</option>
+              <option value="all">all</option>
+            </select>
+          )}
+          <button onClick={load} className="rounded bg-slate-800 px-3 py-2 text-sm text-white">
+            Refresh
+          </button>
+        </div>
+      </div>
 
-                <span
-                  className={`rounded px-2.5 py-0.5 text-xs font-semibold uppercase ${
-                    item.reviewer_action === "pending"
-                      ? "bg-amber-500/20 text-amber-300"
-                      : item.reviewer_action === "approved" ||
-                        item.reviewer_action === "edited"
-                      ? "bg-emerald-500/20 text-emerald-300"
-                      : "bg-rose-500/20 text-rose-300"
-                  }`}
-                >
-                  Status: {item.reviewer_action}
-                </span>
-              </div>
-
-              <div className="mt-3 font-mono text-xs text-slate-300">
-                File:{" "}
-                <span className="text-sky-400">
-                  {item.file_path}:{item.line_start}-{item.line_end}
-                </span>
-              </div>
-
-              <pre className="mt-2 overflow-x-auto rounded-lg border border-slate-800 bg-slate-950 p-3 font-mono text-xs text-emerald-300">
-                {item.evidence_snippet}
-              </pre>
-
-              <p className="mt-3 text-sm text-slate-200">
-                <strong className="text-white">Rationale:</strong> {item.rationale}
-              </p>
-
-              {item.suggested_fix && (
-                <div className="mt-2 rounded border border-emerald-900/40 bg-emerald-950/20 p-2.5 font-mono text-xs text-emerald-200">
-                  <strong>Suggested Fix:</strong> {item.suggested_fix}
-                </div>
-              )}
-
-              <div className="mt-4 flex flex-wrap items-center justify-between gap-4 border-t border-slate-800/80 pt-3">
-                <div className="text-xs text-slate-400">
-                  Procedural Decay Weight:{" "}
-                  <span className="font-mono text-slate-200">
-                    {item.decay_weight}
-                  </span>{" "}
-                  | Verified Evidence Count:{" "}
-                  <span className="font-mono text-slate-200">
-                    {item.evidence_count} / 3 (Anti-Poisoning Gate)
-                  </span>
-                </div>
-
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => handleDecision(item.feedback_id, "approved")}
-                    className="rounded bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500"
-                  >
-                    Approve Finding
-                  </button>
-                  <button
-                    onClick={() => handleDecision(item.feedback_id, "edited")}
-                    className="rounded bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-500"
-                  >
-                    Edit &amp; Post
-                  </button>
-                  <button
-                    onClick={() =>
-                      handleDecision(
-                        item.feedback_id,
-                        "rejected_false_positive"
-                      )
-                    }
-                    className="rounded bg-rose-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-600"
-                  >
-                    Reject False Positive
-                  </button>
-                </div>
-              </div>
-            </div>
-          ))}
-        </section>
+      {loading && <p className="text-sm text-slate-400">Loading live data from {API}…</p>}
+      {error && (
+        <div className="rounded border border-red-500/40 bg-red-950/20 p-4 text-sm text-red-200">
+          {error}
+          <div className="mt-2 font-mono text-xs">Start backend: .venv/bin/uvicorn backend.webhook.app:app --port 8000</div>
+        </div>
       )}
 
-      {activeTab === "traces" && (
-        <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <h2 className="text-lg font-semibold text-white">
-                End-to-End Immutable Hypertable Trace Spine (`agent_events`)
-              </h2>
-              <p className="text-xs text-slate-400">
-                Protected by PostgreSQL/TimescaleDB BEFORE UPDATE OR DELETE and BEFORE TRUNCATE triggers (INV-4)
-              </p>
-            </div>
-            <span className="rounded bg-slate-800 px-3 py-1 font-mono text-xs text-sky-400">
-              Trace: tr-8821-a9f2 | Delivery: deliv-gh-8821
-            </span>
-          </div>
+      {!loading && !error && tab === "hitl" && (
+        prs.length === 0 ? <Empty text="No PRs need review. Run a CLI review to generate findings." /> :
+        <div className="space-y-6">
+          {prs.map((pr) => (
+            <section
+              key={`${pr.repo}#${pr.pr_number}`}
+              className={`rounded-xl border p-5 ${pr.risk_level === "critical" ? "border-red-500/40 bg-red-950/10" : "border-slate-800 bg-slate-900/60"}`}
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={`rounded px-2 py-0.5 text-xs font-bold uppercase ${RISK_STYLE[pr.risk_level] || RISK_STYLE.info}`}>
+                  {pr.risk_level}
+                </span>
+                <span className="rounded bg-slate-800 px-2 py-0.5 font-mono text-xs text-slate-200">
+                  {pr.repo} #{pr.pr_number}
+                </span>
+                <span className="font-mono text-xs text-slate-400">
+                  {pr.total_points} point(s){Object.entries(pr.severity_counts).map(([s, n]) => ` · ${n} ${s}`).join("")}
+                </span>
+              </div>
+              <p className="mt-2 text-sm text-slate-100">{pr.headline}</p>
 
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-left text-xs">
-              <thead>
-                <tr className="border-b border-slate-800 text-slate-400">
-                  <th className="py-2.5 pr-4">Timestamp</th>
-                  <th className="py-2.5 pr-4">Node / Agent</th>
-                  <th className="py-2.5 pr-4">Event Type</th>
-                  <th className="py-2.5 pr-4">Routed Model</th>
-                  <th className="py-2.5 pr-4">Prompt Version</th>
-                  <th className="py-2.5 pr-4">Tokens (In/Out)</th>
-                  <th className="py-2.5 pr-4">Cost (USD)</th>
-                  <th className="py-2.5 pr-4">Latency</th>
-                  <th className="py-2.5">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/70 font-mono">
-                {INITIAL_TRACES.map((span, idx) => (
-                  <tr key={idx} className="hover:bg-slate-800/40">
-                    <td className="py-2.5 pr-4 text-slate-400">
-                      {span.time.slice(11, 23)}
-                    </td>
-                    <td className="py-2.5 pr-4 font-semibold text-sky-400">
-                      {span.agent_name}
-                    </td>
-                    <td className="py-2.5 pr-4 text-slate-200">
-                      {span.event_type}
-                    </td>
-                    <td className="py-2.5 pr-4 text-indigo-300">{span.model}</td>
-                    <td className="py-2.5 pr-4 text-slate-400">
-                      {span.prompt_version}
-                    </td>
-                    <td className="py-2.5 pr-4 text-slate-300">
-                      {span.tokens_in} / {span.tokens_out}
-                    </td>
-                    <td className="py-2.5 pr-4 text-emerald-400">
-                      ${span.cost_usd.toFixed(6)}
-                    </td>
-                    <td className="py-2.5 pr-4 text-amber-300">
-                      {span.latency_ms} ms
-                    </td>
-                    <td className="py-2.5">
-                      <span className="rounded bg-emerald-500/20 px-2 py-0.5 text-emerald-300">
-                        {span.status}
+              <ol className="mt-4 space-y-4">
+                {pr.points.map((p, i) => (
+                  <li key={p.feedback_id || `${p.file_path}:${p.line_start}:${i}`} className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className="font-bold text-slate-300">{i + 1}.</span>
+                      <span className={`rounded px-1.5 py-0.5 font-semibold uppercase ${RISK_STYLE[p.severity] || RISK_STYLE.info}`}>
+                        {p.severity}
                       </span>
-                    </td>
-                  </tr>
+                      <span className="font-mono text-indigo-300">{p.category}</span>
+                      <span className="font-mono text-sky-400">
+                        {p.file_path}:{p.line_start}{p.line_end > p.line_start ? `-${p.line_end}` : ""}
+                      </span>
+                      <span className="ml-auto font-mono text-slate-500">
+                        {(p.confidence * 100).toFixed(0)}% · {p.agent_type} · {p.reviewer_action}
+                      </span>
+                    </div>
+                    <p className="mt-1.5 text-sm text-slate-200">{p.plain_summary}</p>
+                    <pre className="mt-1.5 overflow-x-auto rounded bg-black/40 p-2 font-mono text-xs text-emerald-300">{p.evidence_snippet}</pre>
+                    {p.suggested_fix && <div className="mt-1.5 font-mono text-xs text-emerald-200">Fix: {p.suggested_fix}</div>}
+                    {p.feedback_id && p.reviewer_action === "pending" && (
+                      <div className="mt-2 flex gap-2">
+                        <button onClick={() => decide(p.feedback_id as string, "approved")} className="rounded bg-emerald-600 px-3 py-1 text-xs text-white">Approve</button>
+                        <button onClick={() => decide(p.feedback_id as string, "edited")} className="rounded bg-sky-600 px-3 py-1 text-xs text-white">Edit & Post</button>
+                        <button onClick={() => decide(p.feedback_id as string, "rejected_false_positive")} className="rounded bg-rose-700 px-3 py-1 text-xs text-white">Reject</button>
+                      </div>
+                    )}
+                  </li>
                 ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
+              </ol>
+            </section>
+          ))}
+        </div>
       )}
 
-      {activeTab === "economics" && (
-        <section className="grid grid-cols-1 gap-6 md:grid-cols-2">
-          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
-            <h2 className="text-lg font-semibold text-white">
-              Continuous Aggregate: `hourly_pr_costs` &amp; Budget Guard
-            </h2>
-            <p className="mt-1 text-xs text-slate-400">
-              Real-time token spend circuit breaker trips automatically if 24h spend reaches DAILY_BUDGET_USD ($10.00).
-            </p>
-            <div className="mt-4 space-y-3 text-sm">
-              <div className="flex justify-between border-b border-slate-800 pb-2">
-                <span className="text-slate-400">Circuit Breaker State</span>
-                <span className="font-mono font-semibold text-emerald-400">
-                  CLOSED (Healthy)
-                </span>
-              </div>
-              <div className="flex justify-between border-b border-slate-800 pb-2">
-                <span className="text-slate-400">High-Reasoning Tier (Security / Quality)</span>
-                <span className="font-mono text-slate-200">
-                  claude-3-5-sonnet / gpt-4o ($0.018800)
-                </span>
-              </div>
-              <div className="flex justify-between border-b border-slate-800 pb-2">
-                <span className="text-slate-400">Fast Cost-Effective Tier (Testing / Docs)</span>
-                <span className="font-mono text-slate-200">
-                  claude-3-5-haiku / gpt-4o-mini ($0.002310)
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Semantic Embeddings (`vector(1536)`)</span>
-                <span className="font-mono text-slate-200">
-                  text-embedding-3-small ($0.000008)
-                </span>
-              </div>
+      {!loading && !error && tab === "queue" && (
+        <div className="space-y-4">
+          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+            <div className="text-sm font-semibold text-white">Trigger a review manually</div>
+            <p className="mt-0.5 text-xs text-slate-400">Same path as GitHub webhooks: enqueues to Redis, the worker fetches the diff and reviews.</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <input
+                value={triggerRepo}
+                onChange={(e) => setTriggerRepo(e.target.value)}
+                placeholder="owner/repo"
+                className="w-56 rounded bg-slate-950 px-3 py-2 font-mono text-sm text-slate-100 ring-1 ring-slate-800"
+              />
+              <input
+                value={triggerPr}
+                onChange={(e) => setTriggerPr(e.target.value)}
+                placeholder="PR #"
+                inputMode="numeric"
+                className="w-24 rounded bg-slate-950 px-3 py-2 font-mono text-sm text-slate-100 ring-1 ring-slate-800"
+              />
+              <button onClick={trigger} className="rounded bg-emerald-600 px-4 py-2 text-sm font-semibold text-white">Trigger review</button>
             </div>
+            {triggerMsg && <div className="mt-2 font-mono text-xs text-slate-300">{triggerMsg}</div>}
           </div>
 
-          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
-            <h2 className="text-lg font-semibold text-white">
-              Continuous Aggregate: `agent_health_metrics`
-            </h2>
-            <p className="mt-1 text-xs text-slate-400">
-              Per-specialist P95 latency, timeout isolation (NODE_TIMEOUT_SECONDS=30s), and selectivity rate.
-            </p>
-            <div className="mt-4 space-y-3 text-sm">
-              <div className="flex justify-between border-b border-slate-800 pb-2">
-                <span className="text-slate-400">Webhook Ingress Latency</span>
-                <span className="font-mono text-emerald-400">14 ms (&lt; 200ms SLA)</span>
-              </div>
-              <div className="flex justify-between border-b border-slate-800 pb-2">
-                <span className="text-slate-400">Parallel 4-Specialist Fan-Out Wall Time</span>
-                <span className="font-mono text-sky-400">612 ms (Concurrent Send API)</span>
-              </div>
-              <div className="flex justify-between border-b border-slate-800 pb-2">
-                <span className="text-slate-400">Grounded Evidence Rate (INV-7)</span>
-                <span className="font-mono text-emerald-400">100.0%</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Clean PR Selectivity Score</span>
-                <span className="font-mono text-emerald-400">100.0% (0 False Positives)</span>
-              </div>
-            </div>
-          </div>
-        </section>
+          {queue.items.length === 0 ? <Empty text="Redis queue is empty. Nothing waiting, nothing recent." /> :
+          <table className="w-full text-left text-xs text-slate-200">
+            <thead><tr className="border-b border-slate-800 text-slate-400">
+              <th className="py-2 pr-4">Job</th><th className="py-2 pr-4">PR</th><th className="py-2 pr-4">Status</th><th className="py-2 pr-4">Result</th><th className="py-2">Enqueued</th>
+            </tr></thead>
+            <tbody>
+              {queue.items.map((j) => (
+                <tr key={j.job_id} className="border-b border-slate-800/50 font-mono">
+                  <td className="py-2 pr-4 text-slate-400">{j.job_id}{j.in_arq_queue ? " ●" : ""}</td>
+                  <td className="py-2 pr-4">{j.repo ? `${j.repo}#${j.pr_number}` : "—"}</td>
+                  <td className="py-2 pr-4">
+                    <span className={`rounded px-2 py-0.5 uppercase ${j.in_arq_queue ? "bg-amber-500/20 text-amber-300" : j.status === "done" ? "bg-emerald-500/20 text-emerald-300" : j.status === "failed" ? "bg-rose-500/20 text-rose-300" : "bg-slate-800 text-slate-300"}`}>
+                      {j.in_arq_queue ? "queued" : j.status}
+                    </span>
+                    <span className="ml-2 text-slate-500">{j.source}</span>
+                  </td>
+                  <td className="py-2 pr-4 text-slate-300">
+                    {j.findings_count != null ? `${j.findings_count} findings / ${j.auto_posted} posted` : j.error || "—"}
+                  </td>
+                  <td className="py-2 text-slate-500">{j.enqueued_at ? String(j.enqueued_at).slice(5, 19).replace("T", " ") : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>}
+        </div>
+      )}
+
+      {!loading && !error && tab === "reviews" && (
+        <table className="w-full text-left text-xs text-slate-200">
+          <thead><tr className="border-b border-slate-800 text-slate-400">
+            <th className="py-2 pr-4">Repo</th><th className="py-2 pr-4">PR</th><th className="py-2 pr-4">Status</th><th className="py-2 pr-4">Findings</th><th className="py-2">Delivery</th>
+          </tr></thead>
+          <tbody>
+            {reviews.map((r: any) => (
+              <tr key={r.id} className="border-b border-slate-800/50 font-mono">
+                <td className="py-2 pr-4">{r.repo}</td><td className="py-2 pr-4">{r.pr_number}</td>
+                <td className="py-2 pr-4">{r.status}</td><td className="py-2 pr-4">{r.finding_count}</td>
+                <td className="py-2 text-slate-400">{r.github_delivery_id}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {!loading && !error && tab === "traces" && (
+        <table className="w-full text-left text-xs text-slate-200">
+          <thead><tr className="border-b border-slate-800 text-slate-400">
+            <th className="py-2 pr-4">Time</th><th className="py-2 pr-4">Agent</th><th className="py-2 pr-4">Event</th><th className="py-2 pr-4">Cost</th><th className="py-2">Status</th>
+          </tr></thead>
+          <tbody>
+            {traces.slice().reverse().map((s: any, i: number) => (
+              <tr key={i} className="border-b border-slate-800/50 font-mono">
+                <td className="py-2 pr-4 text-slate-400">{String(s.time).slice(11, 23)}</td>
+                <td className="py-2 pr-4 text-sky-400">{s.agent_name}</td>
+                <td className="py-2 pr-4">{s.event_type}</td>
+                <td className="py-2 pr-4 text-emerald-400">${Number(s.cost_usd || 0).toFixed(6)}</td>
+                <td className="py-2">{s.status}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
     </div>
   );
+}
+
+function Stat({ label, value }: { label: string; value: any }) {
+  return (
+    <div className="rounded-lg border border-slate-800 bg-slate-900/70 px-4 py-2.5">
+      <div className="text-xs text-slate-400">{label}</div>
+      <div className="mt-0.5 font-bold text-white">{value ?? "…"}</div>
+    </div>
+  );
+}
+
+function Empty({ text }: { text: string }) {
+  return <div className="rounded border border-slate-800 bg-slate-900/60 p-6 text-sm text-slate-400">{text}</div>;
 }
