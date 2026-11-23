@@ -1,4 +1,6 @@
-# AGENTS.md — Production Multi-Agent PR Reviewer & AI-Native Engineering Harness
+# PROJECT_SPEC.md — Production Multi-Agent PR Reviewer & AI-Native Engineering Harness
+
+> Archived full specification. Active agent instructions are in [`../AGENTS.md`](../AGENTS.md).
 
 ## 1. Project Identity & Core Philosophy (L0 First Principles)
 **Project Type:** Flagship Full-Stack & Agentic Systems Portfolio Project

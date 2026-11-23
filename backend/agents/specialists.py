@@ -69,7 +69,7 @@ def parse_unified_diff(diff_text: str, default_file: str = "unknown.py") -> List
 
 
 class ModelRouter:
-    """Tiered LLM model router per specialist concern (Section 2 of AGENTS.md)."""
+    """Tiered LLM model router per specialist concern (Section 2 of docs/PROJECT_SPEC.md)."""
 
     DEFAULT_TIERS: Dict[str, str] = {
         "security": "claude-3-5-sonnet",

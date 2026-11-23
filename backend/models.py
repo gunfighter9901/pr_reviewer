@@ -1,4 +1,4 @@
-"""Core data contracts and domain schemas (Section 4 of AGENTS.md)."""
+"""Core data contracts and domain schemas (Section 4 of docs/PROJECT_SPEC.md)."""
 
 from __future__ import annotations
 

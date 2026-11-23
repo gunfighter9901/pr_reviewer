@@ -1,0 +1,47 @@
+# AGENTS.md
+
+Selectivity-first multi-agent PR reviewer: FastAPI webhook ingress → queue/checkpoints → LangGraph 4-specialist fan-out → deduplicating aggregator → HITL gate → GitHub poster. Python backend in `backend/`, Next.js 14 dashboard in `frontend/`, golden regression evals in `evals/`.
+
+The full project spec (architecture rationale, milestones, invariants) is preserved at `docs/PROJECT_SPEC.md`; `.genesis/done.html` is the locked invariant/milestone contract. Read them before architecture changes and do not rewrite `done.html` without user sign-off.
+
+## Commands (use the venv)
+
+`python3` on PATH is 3.15 and lacks the test deps; this repo is developed with `.venv` (Python 3.12).
+
+- Full suite: `.venv/bin/python -m pytest -q`
+- One milestone: `.venv/bin/python -m pytest tests/test_m5_agents.py -v`
+- One test: `.venv/bin/python -m pytest tests/test_m5_agents.py::test_m5_prompt_registry_and_tiered_model_router -q`
+- Golden regression gate: `.venv/bin/python evals/run_evals.py`
+- Ingress server: `.venv/bin/uvicorn backend.webhook.app:app --reload --port 8000`
+- Worker: `.venv/bin/arq backend.worker.WorkerSettings`
+- Frontend: `npm --prefix frontend install`, then `npm --prefix frontend run dev`; the M8 build gate is `npm --prefix frontend run build`.
+
+No lint/format gate is wired up (`npm run lint` exists, but no ESLint config/dependency is committed); pytest and the Next.js build are the real gates. `pyproject.toml` sets `asyncio_mode=auto`, `pythonpath="."`, and `testpaths=["tests"]`.
+
+## Spec vs. implementation (read before editing)
+
+- **The Tiger Data Spine is SQLite in-memory, not Postgres.** `TigerDataSpine` (`backend/db/spine.py`) creates SQLite tables/views/triggers in `:memory:` and parses `backend/db/migrations/001_init.sql` only for introspection. The SQL file is the introspection source of truth; runtime DDL lives in `spine.py`. Mirror schema changes in both or the M2 checks for extensions, hypertables, DiskANN/FTS indexes, and continuous aggregates fail.
+- **Immutability has three layers.** `agent_events` is protected by Postgres triggers in `001_init.sql`, SQLite triggers in `spine.py`, and a `TRUNCATE` guard in `TigerDataSpine.execute_sql`. Tests require `UPDATE`, `DELETE`, and `TRUNCATE` to raise `ImmutableAuditSpineError`.
+- **Specialists are deterministic regex analyzers, not live LLM calls.** The four agents in `backend/agents/specialists.py` scan added diff lines with regex; `llm_callable` is the injection point for a real model, and `ModelRouter` only maps labels to model names. No OpenAI/Anthropic SDK is in the dependency set.
+- **Embeddings and hybrid search are local approximations.** `DeterministicEmbedder` (`backend/retrieval/indexer.py`) uses feature hashing, and `HybridRetriever` computes cosine/lexical scores and RRF in Python over SQLite rows. No OpenAI embedding call or Postgres DiskANN/`tsvector` query runs.
+- **Redis is often fakeredis.** `create_redis_client()` (`backend/worker.py`) returns `fakeredis` for URLs containing `localhost` or the placeholder `host:port`. The FastAPI ingress uses the in-memory `IdempotentWebhookRouter`; `RedisARQWorkerQueue`/`RedisCheckpointStore` are wired only in worker tests and evals, so webhook → Redis → worker is not connected in the running app.
+- **The dashboard is static.** `frontend/src/app/page.tsx` renders hard-coded HITL/trace/economics data and never calls the backend; `NEXT_PUBLIC_API_URL` is unused.
+- **Only the LangGraph adapter may import langgraph.** `tests/test_m4_orchestrator.py` AST-scans `backend/` and fails on any `langgraph` import outside `backend/orchestrator/langgraph_adapter.py`. Depend on `WorkflowEngine` in `backend/orchestrator/engine.py`.
+- **`docker compose up --build` does not work.** `docker-compose.yml` references `Dockerfile` and `frontend/Dockerfile`, neither of which exists. Use the local commands above.
+
+## Coupled contracts and gates
+
+- `Finding` (`backend/models.py`) is `extra="forbid"` and validates grounded evidence. Changing it also touches the `findings` DDL (`001_init.sql` + `spine.py`), `FindingContract` in `frontend/src/app/page.tsx`, and the M5/M7 tests.
+- `tests/test_m1_webhook.py` asserts a signed webhook enqueues in under 200 ms; don't add blocking I/O or LLM work to the FastAPI handler.
+- The aggregator dedupes strictly by `(file_path, line_start)` and boosts confidence when multiple agent types collide; tests assert merged rationales and boosted confidence. Don't change grouping keys without updating M5 tests and golden expectations.
+- Golden evals are a hard regression gate: `tests/test_m8_evals.py` requires 100% category recall, grounded evidence, clean-PR selectivity, and routing accuracy. Heuristic or confidence changes usually require updating `evals/golden_dataset.json` and/or expected routing.
+- Routing: `critical` → `private_security_alert` even at high confidence; `confidence < CONFIDENCE_THRESHOLD` (default 0.75) → `hitl_escalate`; otherwise `auto_post`. `GitHubPRPoster` raises `PublicCriticalSecurityLeakError` if a critical finding is passed for a public repo.
+- HITL feedback decay only adapts procedural memory after `min_evidence_threshold` (3) verified outcomes; preserve this anti-poisoning behavior.
+- `EMBEDDING_DIM` must equal `vector(1536)` in `001_init.sql`; `TigerDataSpine`, `RepositoryIndexer`, and `upsert_code_chunk` fail fast on mismatch. Change the migration and env contract together.
+
+## Environment and state
+
+- `.env` is gitignored; `.env.example` is the committed contract. `Settings` (`backend/config.py`) supplies defaults, so tests run without secrets. Don't hardcode keys or dimensions.
+- Tests need no external services (in-memory SQLite + fakeredis); webhook tests use FastAPI `TestClient`.
+- Milestone state and gate checkpoints live in `.genesis/` (`plan.md`, `current.md`, `implementation_notes.html`, `context_graph.md`). Update them after meaningful changes; `context_graph.md` maps each invariant to the modules and tests that must be re-run.
+- Work milestones through the G0–G4 loop in `docs/PROJECT_SPEC.md` §6; record the G0 verdict and G2 verification results in `.genesis/current.md`.
