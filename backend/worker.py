@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 
 import fakeredis.aioredis
 
+from backend.agents.llm import build_specialist_runner
 from backend.config import Settings, get_settings
 from backend.models import QueuedPRJob
 from backend.orchestrator.engine import WorkflowContext, WorkflowEngine, WorkflowState
@@ -41,6 +42,7 @@ class RedisARQWorkerQueue:
         self.engine: WorkflowEngine = engine or LangGraphEngine(
             checkpoint_store=self.checkpoint_store,
             node_timeout_seconds=self.settings.NODE_TIMEOUT_SECONDS,
+            specialist_runner=build_specialist_runner(self.settings),
         )
 
     async def claim_delivery_id(self, delivery_id: str, ttl_seconds: int = 86400) -> bool:

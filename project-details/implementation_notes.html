@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>GENESIS Implementation Notes — Rolling State</title>
+  <title>Implementation Notes — Rolling State</title>
   <style>
     body { font-family: system-ui, sans-serif; max-width: 1020px; margin: 2rem auto; padding: 0 1rem; color: #0f172a; }
     .status { padding: 0.25rem 0.5rem; border-radius: 4px; font-weight: bold; font-size: 0.85rem; }
@@ -13,8 +13,8 @@
   </style>
 </head>
 <body>
-  <h1>.genesis/implementation_notes.html — Live Rolling State</h1>
-  <p><strong>Session Updated:</strong> 2026-10-19 | <strong>Overall Build State:</strong> M1–M8 Built &amp; G3 Cold-Verified (28/28 Pytest, 5/5 Golden Evals, Next.js Production Build)</p>
+  <h1>project-details/implementation_notes.html — Live Status</h1>
+  <p><strong>Session Updated:</strong> 2026-11-23 | <strong>Overall Build State:</strong> M1–M8 Built &amp; Independently Verified (41/41 Pytest, 5/5 Golden Evals, Next.js Production Build)</p>
 
   <h2>Milestone Status Matrix</h2>
   <table>
@@ -37,9 +37,17 @@
     </tbody>
   </table>
 
+  <h2>Provider Extension</h2>
+  <ul>
+    <li><strong>Gemini LLM (opt-in):</strong> <code>backend/agents/llm.py</code> implements the REST <code>generateContent</code> adapter with schema-constrained JSON, added-line grounding, safety-block handling, and explicit <code>LLM_PROVIDER=gemini</code> selection. Covered by <code>tests/test_gemini_provider.py</code> (7 tests). Live verification returned a grounded critical SQL-injection finding at <code>app/db.py:4</code> (0.99 confidence) using <code>gemini-3.6-flash</code>.</li>
+    <li><strong>Gemini Embedding 2 (opt-in):</strong> <code>EMBEDDING_PROVIDER=gemini</code> selects <code>GeminiEmbedder</code> with <code>output_dimensionality=1536</code>, document/query task types, and fail-fast dimension checks. Covered by <code>tests/test_gemini_embedding.py</code> (6 tests). Live verification produced 1536-dimension vectors and a successful index + hybrid retrieval; a live Tiger <code>&lt;=&gt;</code> nearest-neighbour query returned cosine similarity 1.0.</li>
+  </ul>
+
   <h2>Known Gaps / Active Blockers</h2>
   <ul>
-    <li><strong>None:</strong> All 8 milestones, 7 non-negotiable invariants (<code>INV-1</code>..<code>INV-7</code>), and Golden Evaluation gates are verified and passing.</li>
+    <li><strong>GitHub live API:</strong> <code>GITHUB_TOKEN</code> is still a placeholder and no GitHub App private key is installed, so live PR comment/creation calls were not exercised. Branch push and a GitHub "Create pull request" URL remain available.</li>
+    <li><strong>Runtime persistence:</strong> <code>TigerDataSpine</code> still uses in-memory SQLite. The live Tiger Cloud schema, <code>vector(1536)</code>, hypertable, indexes, continuous aggregates, and nearest-neighbour query were verified directly; Postgres is not yet the runtime backend.</li>
+    <li><strong>End-to-end queue:</strong> FastAPI ingress still uses the in-memory idempotency router; Redis queue/checkpoint wiring is exercised through the worker and verified live (<code>PING</code> + dedup claim), but webhook → Redis → worker is not a single running path.</li>
   </ul>
 </body>
 </html>

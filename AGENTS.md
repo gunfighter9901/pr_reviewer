@@ -2,7 +2,7 @@
 
 Selectivity-first multi-agent PR reviewer: FastAPI webhook ingress → queue/checkpoints → LangGraph 4-specialist fan-out → deduplicating aggregator → HITL gate → GitHub poster. Python backend in `backend/`, Next.js 14 dashboard in `frontend/`, golden regression evals in `evals/`.
 
-The full project spec (architecture rationale, milestones, invariants) is preserved at `docs/PROJECT_SPEC.md`; `.genesis/done.html` is the locked invariant/milestone contract. Read them before architecture changes and do not rewrite `done.html` without user sign-off.
+The full project spec (architecture rationale, milestones, invariants) is preserved at `docs/PROJECT_SPEC.md`; `project-details/done.html` is the locked invariant/milestone contract. Read them before architecture changes and do not rewrite `done.html` without user sign-off.
 
 ## Commands (use the venv)
 
@@ -22,8 +22,8 @@ No lint/format gate is wired up (`npm run lint` exists, but no ESLint config/dep
 
 - **The Tiger Data Spine is SQLite in-memory, not Postgres.** `TigerDataSpine` (`backend/db/spine.py`) creates SQLite tables/views/triggers in `:memory:` and parses `backend/db/migrations/001_init.sql` only for introspection. The SQL file is the introspection source of truth; runtime DDL lives in `spine.py`. Mirror schema changes in both or the M2 checks for extensions, hypertables, DiskANN/FTS indexes, and continuous aggregates fail.
 - **Immutability has three layers.** `agent_events` is protected by Postgres triggers in `001_init.sql`, SQLite triggers in `spine.py`, and a `TRUNCATE` guard in `TigerDataSpine.execute_sql`. Tests require `UPDATE`, `DELETE`, and `TRUNCATE` to raise `ImmutableAuditSpineError`.
-- **Specialists are deterministic regex analyzers, not live LLM calls.** The four agents in `backend/agents/specialists.py` scan added diff lines with regex; `llm_callable` is the injection point for a real model, and `ModelRouter` only maps labels to model names. No OpenAI/Anthropic SDK is in the dependency set.
-- **Embeddings and hybrid search are local approximations.** `DeterministicEmbedder` (`backend/retrieval/indexer.py`) uses feature hashing, and `HybridRetriever` computes cosine/lexical scores and RRF in Python over SQLite rows. No OpenAI embedding call or Postgres DiskANN/`tsvector` query runs.
+- **Specialists default to deterministic regex analyzers; Gemini is opt-in.** The four agents in `backend/agents/specialists.py` scan added diff lines with regex. `LLM_PROVIDER=gemini` wires `backend/agents/llm.py` into `RedisARQWorkerQueue`, where Gemini structured output is schema-constrained and grounded against added diff lines. Tests and golden evals never use the live provider unless a test explicitly injects a mock transport. No OpenAI/Anthropic SDK is in the dependency set.
+- **Embeddings default to local approximations; Gemini Embedding 2 is opt-in.** `DeterministicEmbedder` (`backend/retrieval/indexer.py`) uses feature hashing. `EMBEDDING_PROVIDER=gemini` wires `GeminiEmbedder` (`gemini-embedding-2`, `output_dimensionality=EMBEDDING_DIM`) into `RepositoryIndexer` and `HybridRetriever`; tests and evals keep the deterministic default. `HybridRetriever` still computes cosine/lexical scores and RRF in Python over SQLite rows, so no Postgres DiskANN/`tsvector` query runs in the running app.
 - **Redis is often fakeredis.** `create_redis_client()` (`backend/worker.py`) returns `fakeredis` for URLs containing `localhost` or the placeholder `host:port`. The FastAPI ingress uses the in-memory `IdempotentWebhookRouter`; `RedisARQWorkerQueue`/`RedisCheckpointStore` are wired only in worker tests and evals, so webhook → Redis → worker is not connected in the running app.
 - **The dashboard is static.** `frontend/src/app/page.tsx` renders hard-coded HITL/trace/economics data and never calls the backend; `NEXT_PUBLIC_API_URL` is unused.
 - **Only the LangGraph adapter may import langgraph.** `tests/test_m4_orchestrator.py` AST-scans `backend/` and fails on any `langgraph` import outside `backend/orchestrator/langgraph_adapter.py`. Depend on `WorkflowEngine` in `backend/orchestrator/engine.py`.
@@ -43,5 +43,5 @@ No lint/format gate is wired up (`npm run lint` exists, but no ESLint config/dep
 
 - `.env` is gitignored; `.env.example` is the committed contract. `Settings` (`backend/config.py`) supplies defaults, so tests run without secrets. Don't hardcode keys or dimensions.
 - Tests need no external services (in-memory SQLite + fakeredis); webhook tests use FastAPI `TestClient`.
-- Milestone state and gate checkpoints live in `.genesis/` (`plan.md`, `current.md`, `implementation_notes.html`, `context_graph.md`). Update them after meaningful changes; `context_graph.md` maps each invariant to the modules and tests that must be re-run.
-- Work milestones through the G0–G4 loop in `docs/PROJECT_SPEC.md` §6; record the G0 verdict and G2 verification results in `.genesis/current.md`.
+- Milestone status and verification checkpoints live in `project-details/` (`plan.md`, `current.md`, `implementation_notes.html`, `context_graph.md`). Update them after meaningful changes; `context_graph.md` maps each invariant to the modules and tests that must be re-run.
+- Record milestone status and verification results in `project-details/current.md`.

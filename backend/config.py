@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -39,8 +39,24 @@ class Settings(BaseSettings):
     REDIS_URL: str = Field(default="redis://localhost:6379/0")
 
     # LLM Providers & Embeddings
+    # deterministic: regex specialists (default, offline, test-safe)
+    # gemini: live Gemini generateContent calls wired through the worker path
+    LLM_PROVIDER: Literal["deterministic", "gemini"] = Field(default="deterministic")
+    GEMINI_API_KEY: str = Field(default="")
+    GEMINI_MODEL_HIGH: str = Field(default="gemini-3.6-flash")
+    GEMINI_MODEL_FAST: str = Field(default="gemini-3.5-flash-lite")
+    GEMINI_API_BASE_URL: str = Field(
+        default="https://generativelanguage.googleapis.com/v1beta"
+    )
+    GEMINI_TIMEOUT_SECONDS: float = Field(default=60.0, gt=0.0)
+
     OPENAI_API_KEY: str = Field(default="sk-test-openai-key")
     ANTHROPIC_API_KEY: str = Field(default="sk-ant-test-anthropic-key")
+    # deterministic: feature-hashing embedder (default, offline, test-safe)
+    # gemini: live Gemini Embedding 2 calls with output_dimensionality=EMBEDDING_DIM
+    EMBEDDING_PROVIDER: Literal["deterministic", "gemini"] = Field(
+        default="deterministic"
+    )
     EMBEDDING_MODEL: str = Field(default="text-embedding-3-small")
     EMBEDDING_DIM: int = Field(default=1536, gt=0)
 

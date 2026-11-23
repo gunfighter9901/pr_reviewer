@@ -78,13 +78,35 @@ class ModelRouter:
         "docs": "gpt-4o-mini",
     }
 
-    def __init__(self, overrides: Optional[Dict[str, str]] = None) -> None:
-        self._routes = dict(self.DEFAULT_TIERS)
+    def __init__(
+        self,
+        overrides: Optional[Dict[str, str]] = None,
+        tiers: Optional[Dict[str, str]] = None,
+        default_model: Optional[str] = None,
+    ) -> None:
+        self._routes = dict(tiers or self.DEFAULT_TIERS)
         if overrides:
             self._routes.update(overrides)
+        self._default_model = default_model or self.DEFAULT_TIERS["docs"]
+
+    @classmethod
+    def for_gemini(
+        cls,
+        high_model: str = "gemini-3.6-flash",
+        fast_model: str = "gemini-3.5-flash-lite",
+        overrides: Optional[Dict[str, str]] = None,
+    ) -> "ModelRouter":
+        """Route reasoning-heavy specialists to the high-capability model and cheap ones to the fast model."""
+        tiers = {
+            "security": high_model,
+            "quality": high_model,
+            "testing": fast_model,
+            "docs": fast_model,
+        }
+        return cls(overrides=overrides, tiers=tiers, default_model=fast_model)
 
     def get_model(self, agent_type: str) -> str:
-        return self._routes.get(agent_type, "gpt-4o-mini")
+        return self._routes.get(agent_type, self._default_model)
 
 
 LLMCompletionCallable = Callable[

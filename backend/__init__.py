@@ -1,3 +1,3 @@
-"""Production Multi-Agent PR Reviewer & AI-Native Engineering Harness."""
+"""Production Multi-Agent PR Reviewer."""
 
 __version__ = "1.0.0"

@@ -1,4 +1,4 @@
-"""Milestone 8 Verification Tests: Golden Dataset Evaluation Harness (INV-1..INV-7)."""
+"""Milestone 8 Verification Tests: Golden Dataset Evaluation Suite (INV-1..INV-7)."""
 
 from __future__ import annotations
 

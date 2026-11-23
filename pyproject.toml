@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pr-reviewer"
 version = "1.0.0"
-description = "Production Multi-Agent PR Reviewer & AI-Native Engineering Harness"
+description = "Production Multi-Agent PR Reviewer"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
