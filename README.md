@@ -116,26 +116,95 @@ Optional: Google AI Studio key for Gemini (`LLM_PROVIDER=gemini`); a public URL
 
 ## Startup
 
-```bash
-# 1. Install
-python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt
-cp .env.example .env   # then set GITHUB_TOKEN in .env
+Pick **one** path. Option A is the fastest way to try it (2 minutes, no Redis).
+Option B auto-reviews every PR via webhook + dashboard.
 
-# 2. Review any PR (no webhook, no Redis needed)
+### 0. One-time setup (both options)
+
+```bash
+# Python 3.12 is required (tests, CLI, and worker all assume it)
+python3.12 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+
+# Create config once, then edit it
+cp .env.example .env
+```
+
+Now open `.env` and set at minimum:
+
+```text
+GITHUB_TOKEN=ghp_...   # classic PAT with `repo` scope, or fine-grained PAT with
+                       # Pull requests: Read+Write, Contents: Read, Metadata: Read
+```
+
+> `check` / `review` exit with code 2 while `GITHUB_TOKEN` is still a placeholder.
+> Tests and evals need no token.
+
+### Option A — Review one PR from the terminal (no Redis, no webhook)
+
+```bash
+# 1. Connectivity check — verifies the token, prints head SHA + diff size. Posts nothing.
 .venv/bin/python -m backend.cli check --repo owner/repo --pr 1
-.venv/bin/python -m backend.cli review --repo owner/repo --pr 1 --no-post  # dry run
-.venv/bin/python -m backend.cli review --repo owner/repo --pr 1            # post it
+
+# 2. Dry run — runs all 4 agents + routing, prints the review JSON. Posts nothing.
+.venv/bin/python -m backend.cli review --repo owner/repo --pr 1 --no-post
+
+# 3. Live run — same analysis, then posts eligible comments to the PR.
+.venv/bin/python -m backend.cli review --repo owner/repo --pr 1
 ```
 
-Full stack — webhook, worker, dashboard:
+Add `--post-summary` to step 2 or 3 to post one combined comment instead of
+one inline comment per finding.
 
-```bash
-# .env: QUEUE_BACKEND=redis, REDIS_URL=redis://localhost:6379/0
-redis-server --port 6379                                                       # Redis
-.venv/bin/uvicorn backend.webhook.app:app --port 8000                         # ingress
-.venv/bin/arq backend.worker.WorkerSettings                                   # worker
-npm --prefix frontend install && npm --prefix frontend run dev                # dashboard
-```
+### Option B — Full stack: webhook + worker + dashboard
+
+Use this only if you want `pull_request` events from GitHub to trigger reviews
+automatically. You need Redis for this path — **either** hosted **or** local.
+If `REDIS_URL` already points to hosted Redis (e.g. Upstash), skip local Redis
+entirely: no `redis-server` needed.
+
+1. In `.env`, set:
+
+   ```text
+   QUEUE_BACKEND=redis
+   # Hosted (current setup): worker + ingress connect directly, nothing to run.
+   # Example: REDIS_URL=rediss://default:<password>@<host>:<port>
+   # Local alternative: REDIS_URL=redis://localhost:6379/0
+   REDIS_URL=<your hosted URL or redis://localhost:6379/0>
+   GITHUB_WEBHOOK_SECRET=<same secret you enter in GitHub repo Settings → Webhooks>
+   NEXT_PUBLIC_API_URL=http://localhost:8000   # already the default
+   ```
+
+2. Only if `REDIS_URL` is local (`redis://localhost...`): install and run it.
+   Skip this step for hosted Redis.
+
+   ```bash
+   brew install redis          # macOS, only if `redis-server` is missing
+   redis-server --port 6379    # Terminal 1 — queue (local only)
+   ```
+
+3. Run each command in its **own terminal**:
+
+   ```bash
+   # Terminal 1 — ingress API (receives webhooks, serves the dashboard API)
+   .venv/bin/uvicorn backend.webhook.app:app --port 8000
+   ```
+
+   ```bash
+   # Terminal 2 — background worker (does the actual review)
+   .venv/bin/arq backend.worker.WorkerSettings
+   ```
+
+   ```bash
+   # Terminal 3 — dashboard (run `npm --prefix frontend install` once first)
+   npm --prefix frontend install
+   npm --prefix frontend run dev
+   ```
+
+   For GitHub to reach your ingress you need a public URL
+   (`smee.io` / `ngrok` / VPS tunnel) forwarding to `localhost:8000`, then add it
+   as repo Settings → Webhooks → Payload URL:
+   `https://<your-public-url>/webhooks/github` (event: Pull requests).
 
 | Link | What |
 |---|---|
