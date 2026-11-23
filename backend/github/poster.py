@@ -25,9 +25,11 @@ class GitHubPRPoster:
         circuit_breaker: Optional[CircuitBreaker] = None,
         transport: Optional[GitHubTransportCallable] = None,
         event_logger: Optional[EventSpineLogger] = None,
+        summary_transport: Optional[GitHubTransportCallable] = None,
     ) -> None:
         self.circuit_breaker = circuit_breaker or CircuitBreaker(name="github_pr_poster")
         self._transport = transport or self._default_transport
+        self._summary_transport = summary_transport or self._default_transport
         self.event_logger = event_logger
         self._posted_idempotency_keys: Set[str] = set()
         self.posted_comments: List[Dict[str, Any]] = []
@@ -113,3 +115,60 @@ class GitHubPRPoster:
                 )
 
         return posted_now
+
+    async def post_pr_summary_comment(
+        self,
+        *,
+        delivery_id: str,
+        trace_id: str,
+        repo: str,
+        pr_number: int,
+        commit_sha: str,
+        summary_markdown: str,
+        findings_count: int,
+        is_public_repo: bool = True,
+        contains_critical_details: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """Post the whole-PR review as one conversation comment (idempotent per delivery).
+
+        The summary must never carry critical details on a public thread;
+        callers build it from auto_post findings only and pass counts for
+        anything withheld.
+        """
+        if is_public_repo and contains_critical_details:
+            raise PublicCriticalSecurityLeakError(
+                "Security Vulnerability Rule Violation: Refusing to post critical "
+                f"finding details to public repo {repo}"
+            )
+        if not summary_markdown.strip() or findings_count <= 0:
+            return None
+
+        idem_key = f"summary:{repo}:{pr_number}:{commit_sha}:{delivery_id}"
+        if idem_key in self._posted_idempotency_keys:
+            return None
+
+        payload = {
+            "repo": repo,
+            "pr_number": pr_number,
+            "commit_sha": commit_sha,
+            "body": summary_markdown,
+            "idempotency_key": idem_key,
+        }
+        response = await self.circuit_breaker.call(self._summary_transport, payload)
+        self._posted_idempotency_keys.add(idem_key)
+        self.posted_comments.append(response)
+
+        if self.event_logger is not None:
+            await self.event_logger.log_event(
+                trace_id=trace_id,
+                delivery_id=delivery_id,
+                agent_name="github_poster",
+                event_type="pr_summary_posted",
+                status="ok",
+                metadata={
+                    "repo": repo,
+                    "pr_number": pr_number,
+                    "findings_count": findings_count,
+                },
+            )
+        return response

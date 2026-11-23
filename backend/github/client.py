@@ -272,15 +272,24 @@ class GitHubClient:
         # GitHub rejects lines that are not part of the diff. Keep the feedback
         # visible by falling back to a regular PR conversation comment.
         fallback_body = f"**`{path}:{line_start}`**\n\n{body}"
+        return await self.post_issue_comment(repo, pr_number, fallback_body, extra={"fallback": True, "path": path, "line": int(line_start)})
+
+    async def post_issue_comment(
+        self,
+        repo: str,
+        pr_number: int,
+        body: str,
+        *,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Post a single conversation comment on the PR (used for summaries and fallbacks)."""
         response = await self._request(
             "POST",
             f"/repos/{repo}/issues/{pr_number}/comments",
-            json={"body": fallback_body},
+            json={"body": body},
         )
         data = response.json()
-        data["fallback"] = True
-        data["path"] = path
-        data["line"] = int(line_start)
+        data.update(extra or {})
         return data
 
 
@@ -298,5 +307,19 @@ class GitHubReviewTransport:
             path=str(payload["path"]),
             line_start=int(payload["line"]),
             line_end=int(payload.get("line_end") or payload["line"]),
+            body=str(payload["body"]),
+        )
+
+
+class GitHubSummaryTransport:
+    """Adapter posting the single-PR summary as one conversation comment."""
+
+    def __init__(self, client: GitHubClient) -> None:
+        self.client = client
+
+    async def __call__(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return await self.client.post_issue_comment(
+            repo=str(payload["repo"]),
+            pr_number=int(payload["pr_number"]),
             body=str(payload["body"]),
         )

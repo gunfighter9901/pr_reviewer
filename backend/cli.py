@@ -35,6 +35,11 @@ def _parser() -> argparse.ArgumentParser:
         help="Run analysis and routing without posting comments to GitHub.",
     )
     review.add_argument(
+        "--post-summary",
+        action="store_true",
+        help="Post the whole-PR review as one structured comment instead of one inline comment per finding.",
+    )
+    review.add_argument(
         "--delivery-id",
         default=None,
         help="Override the idempotency key (defaults to a random CLI delivery).",
@@ -74,7 +79,10 @@ async def _review(
     *,
     post_comments: bool,
     delivery_id: Optional[str],
+    post_summary: bool = False,
 ) -> int:
+    if post_summary:
+        settings = settings.model_copy(update={"POST_PR_SUMMARY_COMMENT": True})
     pipeline = build_review_pipeline(settings)
     job = QueuedPRJob(
         delivery_id=delivery_id or f"cli-{uuid.uuid4().hex[:16]}",
@@ -113,6 +121,7 @@ async def _run(args: argparse.Namespace) -> int:
         args.pr,
         post_comments=not args.no_post,
         delivery_id=args.delivery_id,
+        post_summary=args.post_summary,
     )
 
 

@@ -76,3 +76,24 @@ This plan describes the end-to-end implementation of the **Production Multi-Agen
   - `frontend/`, `evals/golden_dataset.json`, `evals/run_evals.py`, `tests/test_m8_evals.py`
 - **Invariants Covered:** `INV-1`..`INV-7`
 - **Verification Command:** `pytest && python evals/run_evals.py && npm --prefix frontend run build` (ALL PASSED)
+
+---
+
+## Post-M8 Extensions (all `[DONE]`)
+
+### Single-PR Summary Review
+- **Touched File Boundaries:**
+  - `backend/agents/aggregator.py` (risk-ordered plain-language summarizer + markdown renderer), `backend/github/client.py` (`post_issue_comment`, `GitHubSummaryTransport`), `backend/github/poster.py` (`post_pr_summary_comment`), `backend/pipeline.py` (summary always computed, single-comment mode via `POST_PR_SUMMARY_COMMENT`), `backend/cli.py` (`--post-summary`), `backend/config.py`, `tests/test_pr_summary.py`
+- **Invariants Covered:** `INV-7` (grounding preserved; critical details never posted publicly)
+- **Verification Command:** `pytest tests/test_pr_summary.py -v` (9/9 PASSED)
+
+### Live Dashboard API + PR-Grouped View
+- **Touched File Boundaries:**
+  - `backend/webhook/api.py` (`GET /api/stats|hitl|pr-summaries|reviews|traces`, `POST /api/hitl/{id}/decision`), `backend/webhook/app.py` (shared spine singleton), `frontend/src/app/page.tsx` (no demo data)
+- **Verification Command:** `npm --prefix frontend run build` + live `curl` against `:8000` (ALL PASSED)
+
+### Redis Queue Control
+- **Touched File Boundaries:**
+  - `backend/webhook/queue.py` (dashboard index, ownership-safe `close()`), `backend/worker.py` (queued → processing → done/failed transitions), `backend/webhook/api.py` (`GET /api/queue`, `POST /api/queue/trigger`), `tests/test_queue_api.py`
+- **Invariants Covered:** `INV-2` (manual triggers share webhook dedup path)
+- **Verification Command:** `pytest tests/test_queue_api.py -v` (5/5 PASSED)

@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from backend.config import Settings, get_settings
 from backend.github.client import is_real_github_token
 from backend.webhook.queue import ArqWebhookQueue
+from backend.webhook.api import register_api_routes
 from backend.webhook.router import IdempotentWebhookRouter
 from backend.webhook.security import WebhookSignatureError, verify_github_signature
 
@@ -63,6 +64,10 @@ def create_app(
     application.state.webhook_router = resolved_router or IdempotentWebhookRouter()
     application.state.event_logger = event_logger
     application.state.budget_guard = budget_guard
+    from backend.db.spine import TigerDataSpine as _Spine
+
+    application.state.spine = _Spine(settings=resolved_settings)
+    register_api_routes(application)
 
     @application.get("/health")
     async def health_check() -> dict[str, Any]:
