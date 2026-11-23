@@ -70,6 +70,7 @@ Use **two different values**:
 
 For a **fine-grained PAT**, grant:
 
+- **Repository access:** select the repositories you want reviewed (or **All repositories**)
 - **Pull requests:** Read and write
 - **Contents:** Read
 - **Metadata:** Read (usually included automatically)
