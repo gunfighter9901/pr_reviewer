@@ -217,6 +217,44 @@ async def test_pipeline_summary_mode_posts_single_comment() -> None:
 
 
 @pytest.mark.asyncio
+async def test_summarizer_agent_is_balanced_versioned_and_logged() -> None:
+    from backend.agents.summarizer import SummarizerAgent
+
+    agent = SummarizerAgent()
+    assert agent.prompt_template.version_id.startswith("summarizer@v")
+    assert agent.model_name
+
+    findings = [
+        _finding(agent_type="security", severity="high", category="swallowed_exception", line_start=5),
+        _finding(agent_type="quality", severity="medium", category="null_dereference", line_start=10),
+        _finding(agent_type="testing", severity="medium", category="missing_edge_case_tests", line_start=15),
+        _finding(agent_type="docs", severity="low", category="missing_docstring", line_start=20),
+    ]
+    seen: list = []
+
+    class SpyLogger:
+        async def log_event(self, **kwargs: object) -> None:
+            seen.append(kwargs)
+
+    agent_with_log = SummarizerAgent(event_logger=SpyLogger())  # type: ignore[arg-type]
+    summary, markdown = await agent_with_log.summarize(
+        "acme/demo", 7, "abc", findings, trace_id="t1", delivery_id="d1"
+    )
+    assert summary.total_points == 4
+    # Balanced: every specialist represented, risk-ordered (high first).
+    assert summary.points[0].severity == "high"
+    assert {p.agent_type for p in summary.points} == {"security", "quality", "testing", "docs"}
+    assert "PR Review" in markdown
+    assert seen and seen[0]["agent_name"] == "summarizer"
+    assert seen[0]["metadata"]["per_agent"] == {
+        "security": 1,
+        "quality": 1,
+        "testing": 1,
+        "docs": 1,
+    }
+
+
+@pytest.mark.asyncio
 async def test_client_posts_issue_comment() -> None:
     import httpx
 

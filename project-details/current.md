@@ -1,8 +1,16 @@
 # project-details/current.md — Milestone Status & Verification Checkpoints
 
-## Active Status: M1–M8 Completed | Live GitHub integration completed | Single-PR summary + live PR-grouped dashboard + Redis queue control completed
+## Active Status: M1–M8 Completed | Live GitHub integration completed | Single-PR summary + live PR-grouped dashboard + Redis queue control completed | SummarizerAgent (5th agent) + clean-comment default + hosted-Redis default verified live on PR #3
 
-### 0. Single-PR Summary Review + Redis Queue Control (latest)
+### 0b. SummarizerAgent + clean-comment default + dashboard auto-post (latest)
+- **SummarizerAgent:** `backend/agents/summarizer.py` is a first-class agent like the four specialists — versioned prompt (`summarizer@v1.0.0`), `ModelRouter` model, `summarizer_completed` event with per-agent/per-severity balance counts, deterministic synthesis as ground truth. `backend/pipeline.py` builds every comment body through it (findings + clean paths); `backend/worker.py` wires it with the live router.
+- **Clean-comment default:** `POST_CLEAN_COMMENT=true` (new in `backend/config.py` + `.env.example`, default on). Clean PRs post a short “all clear” summary comment instead of staying silent; `false` restores silent clean PRs. `post_pr_summary_comment` no longer refuses `findings_count=0`.
+- **Dashboard auto-post default:** `POST /api/queue/trigger` takes `auto_post: bool = True`, stored as `metadata.post_comments`; the worker defaults to full run + auto-post, `false` is a dry run. Dashboard trigger form has “Post to GitHub (off = dry run)” checked by default.
+- **Hosted Redis:** README Option B now states hosted `REDIS_URL` needs no local `redis-server`; terminals renumbered to ingress/worker/dashboard.
+- **Live verification (PR #3):** `.venv/bin/python -m backend.cli review --repo gunfighter9901/chrome_video_scraper --pr 3` → `status: completed`, `findings: 0`, 1 posted comment: `https://github.com/gunfighter9901/chrome_video_scraper/pull/3#issuecomment-7111430397` (“Risk: INFO — No issues found… Safe to merge.”). Dashboard trigger path verified the same way on PR #5 (`…/pull/5#issuecomment-7111152221`).
+- **Tests:** `tests/test_review_pipeline.py` (clean posts by default + silent opt-out), `tests/test_pr_summary.py` (new balanced/versioned/logged agent test); 24 passed across `test_pr_summary + test_review_pipeline + test_m5_agents + test_queue_api + test_m8_evals`; full suite 77 passed / 3 pre-existing env failures (unchanged on stashed tree).
+
+### 0. Single-PR Summary Review + Redis Queue Control
 - **Aggregator:** `summarize_pr_findings` orders all specialist results by risk and explains each in one plain sentence (`RISK_LABELS` + `CATEGORY_EXPLAINERS`); `render_pr_summary_markdown` renders the single-comment body (verdict → counts → numbered points → withheld note).
 - **GitHub:** `POST_PR_SUMMARY_COMMENT=true` posts the whole review as ONE conversation comment (`post_pr_summary_comment`, idempotent per delivery, critical-guard for public repos) instead of N inline comments; default `false` preserves the per-finding path. Opt-in per run: `backend.cli review --post-summary`.
 - **Dashboard:** `GET /api/pr-summaries` groups HITL rows by `(repo, pr_number)` into whole-PR summaries; the review tab renders one structured card per PR with risk badge, headline, ordered points, evidence, fix, and per-point decisions. No demo data.

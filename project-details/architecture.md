@@ -44,8 +44,10 @@ actually runs. Four corrections were made:
 │     │                │              │            │      │
 │     └─────┬──────────┴──────────────┴────────────┘      │
 │           ▼  (barrier join, per-node timeouts)         │
-│    [ Aggregator ] ──► dedup + risk-ordered single      │
-│                       review with plain explanations   │
+│    [ Aggregator ] ──► dedup + risk-ordered findings       │
+│    [ SummarizerAgent ] ──► balanced single review with    │
+│                       plain explanations (all-clear       │
+│                       verdict when zero findings)          │
 └───────────────────────────┬────────────────────────────┘
                             │
                             ▼
@@ -82,7 +84,7 @@ actually runs. Four corrections were made:
 |---|---|---|
 | 1. Ingress | `backend/webhook/{app,security,router,queue,api}.py` | `tests/test_m1_webhook.py`, `tests/test_webhook_queue.py` |
 | 2. Queue & checkpoints | `backend/worker.py`, `orchestrator/langgraph_adapter.py` (`RedisCheckpointStore`) | `tests/test_m4_orchestrator.py`, `tests/test_queue_api.py` |
-| 3. Orchestrator + specialists | `orchestrator/engine.py`, `agents/specialists.py`, `agents/aggregator.py` | `tests/test_m4/m5/m6_*.py`, `tests/test_pr_summary.py` |
+| 3. Orchestrator + specialists | `orchestrator/engine.py`, `agents/specialists.py`, `agents/aggregator.py`, `agents/summarizer.py` | `tests/test_m4/m5/m6_*.py`, `tests/test_pr_summary.py` |
 | 4. Gate + poster | `gates/hitl.py`, `github/{client,poster}.py`, `pipeline.py` | `tests/test_m7_hitl.py`, `tests/test_review_pipeline.py` |
 | 5. Spine | `db/spine.py`, `db/migrations/001_init.sql` | `tests/test_m2_spine.py`, `tests/test_m3_events.py` |
 | 6. Dashboard | `frontend/src/app/page.tsx`, `GET /api/*` | `npm run build`, `tests/test_m8_evals.py` (golden gate) |

@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from backend.agents.aggregator import render_pr_summary_markdown, summarize_pr_findings
+from backend.agents.summarizer import SummarizerAgent
 from backend.config import Settings, get_settings
 from backend.diff_utils import select_reviewable_diff
 from backend.gates.hitl import GateRoutingResult, HITLRoutingGate
@@ -58,6 +58,7 @@ class ReviewPipeline:
         github_client: GitHubClient,
         event_logger: Optional[EventSpineLogger] = None,
         redis_client: Any = None,
+        summarizer: Optional[SummarizerAgent] = None,
     ) -> None:
         self.settings = settings or get_settings()
         self.engine = engine
@@ -66,6 +67,7 @@ class ReviewPipeline:
         self.github_client = github_client
         self.event_logger = event_logger
         self._redis_client = redis_client
+        self.summarizer = summarizer or SummarizerAgent(event_logger=event_logger)
 
     async def aclose(self) -> None:
         await self.github_client.aclose()
@@ -131,14 +133,12 @@ class ReviewPipeline:
         posted: List[Dict[str, Any]] = []
         summary_markdown = ""
         if routing.auto_post_findings:
-            summary = summarize_pr_findings(
+            # Balanced SummarizerAgent synthesis over the routed findings.
+            _, summary_markdown = await self.summarizer.summarize(
                 job.repo,
                 job.pr_number,
                 commit_sha,
                 [rf.finding for rf in routing.auto_post_findings],
-            )
-            summary_markdown = render_pr_summary_markdown(
-                summary,
                 withheld_private=len(routing.private_security_alerts),
                 withheld_hitl=len(
                     [
@@ -147,6 +147,8 @@ class ReviewPipeline:
                         if not rf.private_security_alert
                     ]
                 ),
+                trace_id=job.trace_id,
+                delivery_id=job.delivery_id,
             )
         if post_comments and routing.auto_post_findings:
             if self.settings.POST_PR_SUMMARY_COMMENT:
@@ -175,6 +177,35 @@ class ReviewPipeline:
                     routed_findings=routing.auto_post_findings,
                     is_public_repo=is_public,
                 )
+        elif (
+            not routing.auto_post_findings
+            and not routing.hitl_escalated_findings
+            and not routing.private_security_alerts
+        ):
+            # Clean PR: the SummarizerAgent always builds the "all clear"
+            # verdict for the summary record; it is posted as a GitHub
+            # comment by default (POST_CLEAN_COMMENT) so the thread shows it.
+            _, summary_markdown = await self.summarizer.summarize(
+                job.repo,
+                job.pr_number,
+                commit_sha,
+                [],
+                trace_id=job.trace_id,
+                delivery_id=job.delivery_id,
+            )
+            if post_comments and self.settings.POST_CLEAN_COMMENT:
+                single = await self.poster.post_pr_summary_comment(
+                    delivery_id=job.delivery_id,
+                    trace_id=job.trace_id,
+                    repo=job.repo,
+                    pr_number=job.pr_number,
+                    commit_sha=commit_sha,
+                    summary_markdown=summary_markdown,
+                    findings_count=0,
+                    is_public_repo=is_public,
+                    contains_critical_details=False,
+                )
+                posted = [single] if single is not None else []
 
         if routing.hitl_escalated_findings:
             status = "escalated_hitl"

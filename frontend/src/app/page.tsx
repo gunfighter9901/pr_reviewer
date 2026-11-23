@@ -80,6 +80,7 @@ export default function DashboardPage() {
   const [traces, setTraces] = useState<any[]>([]);
   const [triggerRepo, setTriggerRepo] = useState("");
   const [triggerPr, setTriggerPr] = useState("");
+  const [triggerAutoPost, setTriggerAutoPost] = useState(true);
   const [triggerMsg, setTriggerMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -126,11 +127,11 @@ export default function DashboardPage() {
       const res = await fetch(`${API}/api/queue/trigger`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ repo: triggerRepo.trim(), pr_number: pr }),
+        body: JSON.stringify({ repo: triggerRepo.trim(), pr_number: pr, auto_post: triggerAutoPost }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.detail || `HTTP ${res.status}`);
-      setTriggerMsg(`✓ ${data.status}: ${data.repo}#${data.pr_number} (${data.job_id}) — worker picks it up automatically.`);
+      setTriggerMsg(`✓ ${data.status}: ${data.repo}#${data.pr_number} (${data.job_id}) — worker ${data.auto_post ? "runs and auto-posts" : "dry-runs (no post)"} automatically.`);
       setTriggerRepo("");
       setTriggerPr("");
     } catch (e: any) {
@@ -277,6 +278,15 @@ export default function DashboardPage() {
                 className="w-24 rounded bg-slate-950 px-3 py-2 font-mono text-sm text-slate-100 ring-1 ring-slate-800"
               />
               <button onClick={trigger} className="rounded bg-emerald-600 px-4 py-2 text-sm font-semibold text-white">Trigger review</button>
+              <label className="flex items-center gap-1.5 text-xs text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={triggerAutoPost}
+                  onChange={(e) => setTriggerAutoPost(e.target.checked)}
+                  className="h-4 w-4 accent-emerald-600"
+                />
+                Post to GitHub (off = dry run)
+              </label>
             </div>
             {triggerMsg && <div className="mt-2 font-mono text-xs text-slate-300">{triggerMsg}</div>}
           </div>
