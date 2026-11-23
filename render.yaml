@@ -1,0 +1,104 @@
+# Render Blueprint: public webhook ingress + background worker + private Redis.
+#
+# Apply from the Render Dashboard: New > Blueprint > connect this repository.
+# Render prompts for the three `sync: false` secrets during creation.
+#
+# Plans: the web service can run on `free` for testing (it spins down when idle,
+# which can make GitHub webhook deliveries time out). Use `starter` for a
+# reliable public endpoint. Background workers and persistent disks require a
+# paid plan.
+
+services:
+  - type: keyvalue
+    name: pr-reviewer-redis
+    plan: free
+    ipAllowList: [] # private network only
+    maxmemoryPolicy: noeviction
+
+  - type: web
+    name: pr-reviewer-ingress
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    plan: free # change to starter for production reliability
+    envVars:
+      - key: QUEUE_BACKEND
+        value: redis
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: pr-reviewer-redis
+          property: connectionString
+      - key: GITHUB_WEBHOOK_SECRET
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_API_BASE_URL
+        value: https://api.github.com
+      - key: LLM_PROVIDER
+        value: gemini
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL_HIGH
+        value: gemini-3.6-flash
+      - key: GEMINI_MODEL_FAST
+        value: gemini-3.5-flash-lite
+      - key: EMBEDDING_PROVIDER
+        value: gemini
+      - key: EMBEDDING_MODEL
+        value: gemini-embedding-2
+      - key: EMBEDDING_DIM
+        value: "1536"
+      - key: MAX_REVIEW_DIFF_BYTES
+        value: "120000"
+      - key: NODE_TIMEOUT_SECONDS
+        value: "60"
+      - key: DAILY_BUDGET_USD
+        value: "10.00"
+
+  - type: worker
+    name: pr-reviewer-worker
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: arq backend.worker.WorkerSettings
+    plan: 0.5c-512mb
+    envVars:
+      - key: QUEUE_BACKEND
+        value: redis
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: pr-reviewer-redis
+          property: connectionString
+      - key: SPINE_SQLITE_PATH
+        value: /data/pr_reviewer.sqlite
+      - key: GITHUB_WEBHOOK_SECRET
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_API_BASE_URL
+        value: https://api.github.com
+      - key: LLM_PROVIDER
+        value: gemini
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL_HIGH
+        value: gemini-3.6-flash
+      - key: GEMINI_MODEL_FAST
+        value: gemini-3.5-flash-lite
+      - key: EMBEDDING_PROVIDER
+        value: gemini
+      - key: EMBEDDING_MODEL
+        value: gemini-embedding-2
+      - key: EMBEDDING_DIM
+        value: "1536"
+      - key: MAX_REVIEW_DIFF_BYTES
+        value: "120000"
+      - key: NODE_TIMEOUT_SECONDS
+        value: "60"
+      - key: DAILY_BUDGET_USD
+        value: "10.00"
+    disk:
+      name: pr-reviewer-data
+      mountPath: /data
+      sizeGB: 1

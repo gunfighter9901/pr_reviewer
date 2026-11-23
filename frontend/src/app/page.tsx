@@ -278,7 +278,7 @@ export default function OperationalDashboardPage() {
             </span>
           </div>
           <h1 className="mt-2 text-2xl font-bold tracking-tight text-white">
-            Multi-Agent PR Reviewer — Operational Harness
+            Multi-Agent PR Reviewer — Operations Dashboard
           </h1>
           <p className="mt-1 text-sm text-slate-400">
             HITL Escalation Queue, Append-Only Hypertable Trace Spine, and Real-Time Token Budget Guard

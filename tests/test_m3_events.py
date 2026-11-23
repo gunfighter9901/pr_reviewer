@@ -39,6 +39,7 @@ def _pr_payload() -> Dict[str, Any]:
 @pytest.fixture()
 def observability_env() -> tuple[TestClient, TigerDataSpine, EventSpineLogger, BudgetGuard]:
     settings = Settings(
+        _env_file=None,
         GITHUB_WEBHOOK_SECRET=TEST_SECRET,
         DAILY_BUDGET_USD=1.00,
     )

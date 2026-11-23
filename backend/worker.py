@@ -2,21 +2,28 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any, Dict, List, Optional
 
 import fakeredis.aioredis
+from arq.connections import RedisSettings
 
+from backend.agents.llm import build_specialist_runner
 from backend.config import Settings, get_settings
+from backend.db.spine import TigerDataSpine
+from backend.gates.hitl import HITLRoutingGate
+from backend.github.client import GitHubClient, GitHubReviewTransport
+from backend.github.poster import GitHubPRPoster
 from backend.models import QueuedPRJob
+from backend.observability.events import EventSpineLogger
 from backend.orchestrator.engine import WorkflowContext, WorkflowEngine, WorkflowState
 from backend.orchestrator.langgraph_adapter import LangGraphEngine, RedisCheckpointStore
+from backend.pipeline import ReviewPipeline
 
 
 def create_redis_client(settings: Optional[Settings] = None) -> Any:
-    """Return an async Redis client (falls back to fakeredis for deterministic local/test execution)."""
+    """Return an async Redis client; explicit fake/memory URLs stay offline for tests."""
     cfg = settings or get_settings()
-    if cfg.REDIS_URL.startswith(("fakeredis://", "memory://")) or "localhost" in cfg.REDIS_URL or "host:port" in cfg.REDIS_URL:
+    if cfg.REDIS_URL.startswith(("fakeredis://", "memory://")) or "host:port" in cfg.REDIS_URL:
         return fakeredis.aioredis.FakeRedis(decode_responses=False)
     import redis.asyncio as aioredis
 
@@ -24,7 +31,7 @@ def create_redis_client(settings: Optional[Settings] = None) -> Any:
 
 
 class RedisARQWorkerQueue:
-    """Manages FIFO job queuing in Redis/ARQ, webhook delivery deduplication (INV-2), and worker execution."""
+    """Legacy FIFO helper used by tests; production jobs run through ARQ + ReviewPipeline."""
 
     QUEUE_KEY = "arq:queue:pr_reviews"
     DEDUP_PREFIX = "pr_reviewer:dedup:delivery:"
@@ -41,6 +48,7 @@ class RedisARQWorkerQueue:
         self.engine: WorkflowEngine = engine or LangGraphEngine(
             checkpoint_store=self.checkpoint_store,
             node_timeout_seconds=self.settings.NODE_TIMEOUT_SECONDS,
+            specialist_runner=build_specialist_runner(self.settings),
         )
 
     async def claim_delivery_id(self, delivery_id: str, ttl_seconds: int = 86400) -> bool:
@@ -81,28 +89,65 @@ class RedisARQWorkerQueue:
         return await self.engine.run(ctx)
 
 
-async def process_pr_review_task(ctx: Dict[str, Any], job_payload: Dict[str, Any]) -> Dict[str, Any]:
-    """ARQ background worker entrypoint task."""
-    worker_queue: RedisARQWorkerQueue = ctx.get("worker_queue") or RedisARQWorkerQueue()
-    job = QueuedPRJob.model_validate(job_payload)
-    wf_ctx = WorkflowContext(
-        delivery_id=job.delivery_id,
-        trace_id=job.trace_id,
-        repo=job.repo,
-        pr_number=job.pr_number,
-        commit_sha=job.commit_sha,
-        is_public=job.is_public,
-        diff=job.diff,
-        changed_files=job.changed_files,
-        metadata=job.metadata,
+def build_review_pipeline(settings: Optional[Settings] = None) -> ReviewPipeline:
+    """Build the live review pipeline used by the ARQ worker and the manual CLI."""
+    cfg = settings or get_settings()
+    spine = TigerDataSpine(settings=cfg)
+    event_logger = EventSpineLogger(spine=spine)
+    redis_client = create_redis_client(cfg)
+    checkpoint_store = RedisCheckpointStore(redis_client)
+    engine = LangGraphEngine(
+        checkpoint_store=checkpoint_store,
+        node_timeout_seconds=cfg.NODE_TIMEOUT_SECONDS,
+        specialist_runner=build_specialist_runner(cfg),
+        event_logger=event_logger,
     )
-    state = await worker_queue.engine.run(wf_ctx)
-    return state.model_dump()
+    github_client = GitHubClient(settings=cfg)
+    gate = HITLRoutingGate(spine=spine, settings=cfg, event_logger=event_logger)
+    poster = GitHubPRPoster(
+        transport=GitHubReviewTransport(github_client),
+        event_logger=event_logger,
+    )
+    return ReviewPipeline(
+        settings=cfg,
+        engine=engine,
+        gate=gate,
+        poster=poster,
+        github_client=github_client,
+        event_logger=event_logger,
+        redis_client=redis_client,
+    )
+
+
+async def process_pr_review_task(
+    ctx: Dict[str, Any], job_payload: Dict[str, Any]
+) -> Dict[str, Any]:
+    """ARQ task entrypoint: build/reuse the pipeline, fetch the diff, review, and post."""
+    pipeline: Optional[ReviewPipeline] = ctx.get("review_pipeline")
+    if pipeline is None:
+        pipeline = build_review_pipeline()
+        ctx["review_pipeline"] = pipeline
+
+    job = QueuedPRJob.model_validate(job_payload)
+    summary = await pipeline.process(job)
+    return summary.model_dump(mode="json")
 
 
 class WorkerSettings:
     """ARQ WorkerSettings configuration (`arq backend.worker.WorkerSettings`)."""
 
     functions = [process_pr_review_task]
-    max_jobs = 10
-    job_timeout = 120
+    redis_settings = RedisSettings.from_dsn(get_settings().REDIS_URL)
+    max_jobs = 4
+    job_timeout = 300
+    keep_result = 3600
+
+    @staticmethod
+    async def on_startup(ctx: Dict[str, Any]) -> None:
+        ctx["review_pipeline"] = build_review_pipeline()
+
+    @staticmethod
+    async def on_shutdown(ctx: Dict[str, Any]) -> None:
+        pipeline: Optional[ReviewPipeline] = ctx.get("review_pipeline")
+        if pipeline is not None:
+            await pipeline.aclose()

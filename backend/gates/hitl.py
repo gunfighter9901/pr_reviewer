@@ -31,7 +31,7 @@ class GateRoutingResult:
 
 
 class HITLRoutingGate:
-    """Enforces the Selectivity & Autonomy Gate (Section 3.1 Stage 5 of AGENTS.md).
+    """Enforces the Selectivity & Autonomy Gate (Section 3.1 Stage 5 of docs/PROJECT_SPEC.md).
 
     Rules:
     - Auto-Post to GitHub: confidence >= CONFIDENCE_THRESHOLD AND severity != 'critical'.

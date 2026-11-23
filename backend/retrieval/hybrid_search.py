@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set
 
 from backend.db.spine import TigerDataSpine
 from backend.observability.events import EventSpineLogger
-from backend.retrieval.indexer import DeterministicEmbedder, _tokenize_code
+from backend.retrieval.indexer import Embedder, _tokenize_code, build_embedder
 
 
 def _cosine_similarity(vec_a: Sequence[float], vec_b: Sequence[float]) -> float:
@@ -78,12 +78,12 @@ class HybridRetriever:
     def __init__(
         self,
         spine: TigerDataSpine,
-        embedder: Optional[DeterministicEmbedder] = None,
+        embedder: Optional[Embedder] = None,
         event_logger: Optional[EventSpineLogger] = None,
         rrf_k: int = 20,
     ) -> None:
         self.spine = spine
-        self.embedder = embedder or DeterministicEmbedder(dimension=spine.embedding_dim)
+        self.embedder = embedder or build_embedder(spine.settings)
         self.event_logger = event_logger
         self.rrf_k = rrf_k
 
@@ -99,7 +99,7 @@ class HybridRetriever:
         if not chunks:
             return []
 
-        query_vec = self.embedder.embed(query_text)
+        query_vec = self.embedder.embed_query(query_text)
         query_tokens = set(_tokenize_code(query_text))
 
         scored: List[Dict[str, Any]] = []

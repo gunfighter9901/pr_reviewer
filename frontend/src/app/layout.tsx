@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Multi-Agent PR Reviewer — Operational Harness & HITL Console",
+  title: "Multi-Agent PR Reviewer — Operations Console & HITL Dashboard",
   description:
     "Selectivity-first autonomous code review: HITL Approval Queue, End-to-End Trace Viewer, and Tiger Data Spine Economics Dashboard.",
 };

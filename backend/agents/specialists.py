@@ -69,7 +69,7 @@ def parse_unified_diff(diff_text: str, default_file: str = "unknown.py") -> List
 
 
 class ModelRouter:
-    """Tiered LLM model router per specialist concern (Section 2 of AGENTS.md)."""
+    """Tiered LLM model router per specialist concern (Section 2 of docs/PROJECT_SPEC.md)."""
 
     DEFAULT_TIERS: Dict[str, str] = {
         "security": "claude-3-5-sonnet",
@@ -78,13 +78,35 @@ class ModelRouter:
         "docs": "gpt-4o-mini",
     }
 
-    def __init__(self, overrides: Optional[Dict[str, str]] = None) -> None:
-        self._routes = dict(self.DEFAULT_TIERS)
+    def __init__(
+        self,
+        overrides: Optional[Dict[str, str]] = None,
+        tiers: Optional[Dict[str, str]] = None,
+        default_model: Optional[str] = None,
+    ) -> None:
+        self._routes = dict(tiers or self.DEFAULT_TIERS)
         if overrides:
             self._routes.update(overrides)
+        self._default_model = default_model or self.DEFAULT_TIERS["docs"]
+
+    @classmethod
+    def for_gemini(
+        cls,
+        high_model: str = "gemini-3.6-flash",
+        fast_model: str = "gemini-3.5-flash-lite",
+        overrides: Optional[Dict[str, str]] = None,
+    ) -> "ModelRouter":
+        """Route reasoning-heavy specialists to the high-capability model and cheap ones to the fast model."""
+        tiers = {
+            "security": high_model,
+            "quality": high_model,
+            "testing": fast_model,
+            "docs": fast_model,
+        }
+        return cls(overrides=overrides, tiers=tiers, default_model=fast_model)
 
     def get_model(self, agent_type: str) -> str:
-        return self._routes.get(agent_type, "gpt-4o-mini")
+        return self._routes.get(agent_type, self._default_model)
 
 
 LLMCompletionCallable = Callable[
@@ -121,6 +143,11 @@ class SpecialistAgent:
         tmpl = self.prompt_template
         model = self.model_name
         default_file = context.changed_files[0] if context.changed_files else "src/app.py"
+        added_lines = parse_unified_diff(context.diff, default_file=default_file)
+        if not added_lines:
+            # Nothing was added (docs-only/binary/deleted diff); skip LLM spend.
+            return []
+
         user_prompt = tmpl.render_user_prompt(
             repo=context.repo,
             pr_number=context.pr_number,
@@ -130,21 +157,31 @@ class SpecialistAgent:
             procedural_context=str(context.retrieved_context.get("procedural", "")),
         )
 
+        deterministic_findings = self._analyze_lines(added_lines, tmpl.version_id, context)
+        findings = deterministic_findings
+        llm_status = "disabled"
+        llm_error: Optional[str] = None
+        llm_findings: List[Finding] = []
+
         if self.llm_callable is not None:
-            raw_items = await self.llm_callable(model, tmpl, user_prompt, context)
-            findings = [
-                Finding.model_validate(
-                    {
-                        **item,
-                        "agent_type": self.agent_type,
-                        "prompt_version": item.get("prompt_version") or tmpl.version_id,
-                    }
-                )
-                for item in raw_items
-            ]
-        else:
-            added_lines = parse_unified_diff(context.diff, default_file=default_file)
-            findings = self._analyze_lines(added_lines, tmpl.version_id, context)
+            try:
+                raw_items = await self.llm_callable(model, tmpl, user_prompt, context)
+                llm_findings = [
+                    Finding.model_validate(
+                        {
+                            **item,
+                            "agent_type": self.agent_type,
+                            "prompt_version": item.get("prompt_version") or tmpl.version_id,
+                        }
+                    )
+                    for item in raw_items
+                ]
+                findings = self._merge_findings(deterministic_findings, llm_findings)
+                llm_status = "ok" if llm_findings else "empty"
+            except Exception as exc:  # noqa: BLE001 - LLM outage must not drop the review
+                llm_status = "degraded"
+                llm_error = f"{exc.__class__.__name__}: {str(exc)[:240]}"
+                findings = deterministic_findings
 
         if self.event_logger is not None:
             tokens_in = max(64, len(user_prompt) // 4)
@@ -158,11 +195,35 @@ class SpecialistAgent:
                 prompt_version=tmpl.version_id,
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
-                status="ok",
-                metadata={"findings_emitted": len(findings)},
+                status="degraded" if llm_error else "ok",
+                metadata={
+                    "findings_emitted": len(findings),
+                    "deterministic_findings": len(deterministic_findings),
+                    "llm_findings": len(llm_findings),
+                    "llm_status": llm_status,
+                    "error": llm_error,
+                },
             )
 
         return findings
+
+    @staticmethod
+    def _merge_findings(
+        deterministic: List[Finding], llm_findings: List[Finding]
+    ) -> List[Finding]:
+        """Combine rule-based and model findings, keeping the highest confidence per location."""
+        merged: Dict[tuple[str, int, int, str], Finding] = {}
+        for finding in [*deterministic, *llm_findings]:
+            key = (
+                finding.file_path,
+                finding.line_start,
+                finding.line_end,
+                finding.category,
+            )
+            existing = merged.get(key)
+            if existing is None or finding.confidence > existing.confidence:
+                merged[key] = finding
+        return list(merged.values())
 
     def _analyze_lines(
         self,

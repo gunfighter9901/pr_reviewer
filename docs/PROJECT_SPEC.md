@@ -1,4 +1,6 @@
-# AGENTS.md — Production Multi-Agent PR Reviewer & AI-Native Engineering Harness
+# PROJECT_SPEC.md — Production Multi-Agent PR Reviewer
+
+> Archived full specification. Active agent instructions are in [`../AGENTS.md`](../AGENTS.md).
 
 ## 1. Project Identity & Core Philosophy (L0 First Principles)
 **Project Type:** Flagship Full-Stack & Agentic Systems Portfolio Project
@@ -23,8 +25,8 @@ We use a **Modular Monolith** pattern separating stateless ingestion from asynch
   2. **Relational Truth (Transactional):** Standard PostgreSQL tables for PR reviews, structured findings, architectural conventions (procedural memory), and HITL feedback queues.
   3. **Time-Series Observability (Event Spine):** `TimescaleDB` Hypertables (`agent_events`) and Continuous Aggregates for immutable audit trails, latency P95s, and real-time LLM token budget circuit breaking.
 * **LLM & Embedding Strategy:**
-  * **Model Routing:** Tiered routing per agent concern (e.g., high-reasoning models like Claude Opus/Sonnet or GPT-4o for Security/Quality; fast/cost-effective models like Haiku/GLM/Mini for Docs/Formatting).
-  * **Embeddings:** OpenAI `text-embedding-3-large` or `text-embedding-3-small` (Strict invariant: `.env` `EMBEDDING_DIM` **must** match the PostgreSQL `vector(N)` column definition).
+  * **Model Routing:** Tiered routing per agent concern. The implemented live provider is Gemini (`LLM_PROVIDER=gemini`): Security/Quality use `gemini-3.6-flash`, Testing/Docs use `gemini-3.5-flash-lite`. Deterministic regex analyzers remain the default offline path for tests and golden evals.
+  * **Embeddings:** Deterministic feature hashing is the default offline path. `EMBEDDING_PROVIDER=gemini` enables Gemini Embedding 2 (`gemini-embedding-2`) with `output_dimensionality=EMBEDDING_DIM`. Strict invariant: `.env` `EMBEDDING_DIM` **must** match the PostgreSQL `vector(N)` column definition (`vector(1536)` in the committed migration).
 * **Frontend Dashboard:** **Next.js (App Router, TypeScript, Tailwind CSS)** — Minimal, high-signal operational UI featuring the Human-in-the-Loop (HITL) Approval Queue, End-to-End Trace Viewer, and LLM Cost/Economics Dashboard.
 * **Deployment:** Docker Compose (local dev) & Railway (production).
 
@@ -104,40 +106,26 @@ The coding agent must never violate these invariants during implementation:
 
 ---
 
-## 6. AI-Native Engineering Harness ("The Genesis Ritual")
-You (the Coding Agent) do not "vibe code." You operate inside a strict, stateful engineering loop maintained in the `.genesis/` directory.
+## 6. Project State Directory
 
-### 6.1 State Spine Directory (`.genesis/`)
-Before writing any code in a session, inspect `.genesis/`. If it does not exist, initialize it with:
-* `.genesis/done.html` — **Locked Specification & Invariants.** Defines the exact cognitive job, architecture boundaries, invariants, and milestone demo commands. **Read-Only for Builder Agents** once locked with the user.
-* `.genesis/plan.md` — **Master Milestone Plan.** Lists milestones (`M1`..`M8`), touched file boundaries, success criteria, required skills, and token budgets.
-* `.genesis/implementation_notes.html` — **Live Rolling State.** Tracks what is currently built vs. stubbed, active blockers, known gaps, and session logs.
-* `.genesis/context_graph.md` — Maps system invariants (`INV-1`..`INV-7`) to specific code modules and tests so changes trigger targeted regression checks.
-* `.genesis/current.md` — Active milestone scratchpad and gate checkpoints (`G0`–`G4`).
+Project status, milestone plans, invariants, and verification checkpoints are maintained in the `project-details/` directory so architectural decisions stay traceable across sessions.
 
-### 6.2 The 5-Gate Execution Loop (Run Per Milestone)
-For every milestone (`M1` through `M8`), execute this exact state machine:
+### 6.1 Project State Files
 
-1. **Gate 0 (`G0` — Pre-Flight & Reality Check):**
-   * Read `.genesis/implementation_notes.html`, `.genesis/plan.md`, and grep the actual codebase.
-   * Verify what already exists so you never duplicate modules or overwrite working code.
-   * Write the `G0` checkpoint to `.genesis/current.md` and declare verdict: `UNBUILT`, `PARTIAL`, or `DONE`.
-2. **Gate 1 (`G1` — Micro-Plan & Failure Matrix):**
-   * Draft a concise micro-plan for the current milestone.
-   * Explicitly list **Engineering Failure Modes** (timeouts, retries, malformed inputs, deadlocks) and **LLM Failure Modes** (hallucinations, ungrounded citations, schema drift) in a 2x2 risk matrix.
-3. **Gate 2 (`G2` — Iterative Build & Test Loop):**
-   * Implement code strictly within the milestone's file boundaries.
-   * Write unit, integration, and fault-injection tests covering both happy paths and the `G1` failure modes.
-   * Run the milestone's exact **Demo Command**. If tests fail, enter the **L2 Debug Loop** (hypothesize root cause -> minimal fix -> regression test).
-4. **Gate 3 (`G3` — Independent Cold Verification):**
-   * Do **not** trust your own build log. Run an independent verification pass (or spawn a fresh sub-agent verifier) that receives *only* the code, `.genesis/done.html` invariants, and the demo command.
-   * Verify every invariant (`INV-1`..`INV-7`) and edge case (e.g., malformed signed JSON, SQL `TRUNCATE` attempts, env dimension mismatches).
-5. **Gate 4 (`G4` — Human Comprehension Quiz & State Commit):**
-   * Before marking a milestone complete, present the user with **3 targeted engineering questions** (`Quiz Me` protocol):
-     1. *Design Rationale Question:* Why a specific architectural mechanism was chosen (e.g., triggers vs. rules on hypertables).
-     2. *Edge-Case Question:* How the code behaves under a specific adversarial or boundary input.
-     3. *Change-Impact Question:* What breaks downstream if a specific config or contract changes.
-   * Wait for user confirmation, then update `.genesis/implementation_notes.html`, `.genesis/plan.md`, and `.genesis/current.md`.
+Before making a significant change, inspect `project-details/`:
+
+* `project-details/done.html` — **Locked Specification & Invariants.** Defines the cognitive job, architecture boundaries, invariants, and milestone demo commands. **Read-Only** once locked with the user.
+* `project-details/plan.md` — **Master Milestone Plan.** Lists milestones (`M1`..`M8`), touched file boundaries, success criteria, and verification commands.
+* `project-details/implementation_notes.html` — **Live Status.** Tracks what is currently built vs. stubbed, active blockers, known gaps, and session logs.
+* `project-details/context_graph.md` — Maps system invariants (`INV-1`..`INV-7`) to specific code modules and tests so changes trigger targeted regression checks.
+* `project-details/current.md` — Active milestone scratchpad and verification checkpoints.
+
+### 6.2 Maintaining Project State
+
+* Verify what already exists before adding new modules.
+* Run the verification command for the affected milestone and record the result.
+* Keep `done.html` unchanged unless the user explicitly approves a change to the locked contract.
+* Update `plan.md`, `current.md`, and `implementation_notes.html` when milestone status or verification evidence changes.
 
 ---
 
@@ -154,7 +142,7 @@ Build the system strictly in this dependency order:
 | **M5: Specialist Agents & Aggregator** | Implement `Security`, `Quality`, `Testing`, and `Docs` agents with versioned Prompt Registry, model router, structured `Finding` output enforcement, and deduplicating Aggregator. | `backend/agents/specialists.py`, `backend/agents/aggregator.py`, `backend/prompts/registry.py`, `tests/test_m5_agents.py` | `pytest tests/test_m5_agents.py -v` (Run sample PR diff through all 4 specialists -> verify deduplicated `Finding` list with rationale & confidence). |
 | **M6: Hybrid RAG & Context Engineering** | Repository chunker/embedder plus hybrid retriever combining `pgvectorscale` DiskANN similarity, PostgreSQL FTS (`tsvector`), episodic past disputes, and procedural conventions. | `backend/retrieval/indexer.py`, `backend/retrieval/hybrid_search.py`, `tests/test_m6_retrieval.py` | `pytest tests/test_m6_retrieval.py -v` (Index sample repo, execute hybrid query on PR diff, assert relevant callers/conventions retrieved). |
 | **M7: HITL Gate, GitHub Poster & Reliability** | Confidence & severity routing gate, private escalation for critical security issues, GitHub PR Review API poster, circuit breakers, and feedback loop decay logic. | `backend/gates/hitl.py`, `backend/github/poster.py`, `backend/reliability/circuit_breaker.py`, `tests/test_m7_hitl.py` | `pytest tests/test_m7_hitl.py -v` (Verify high-confidence auto-posts, low-confidence/critical routes to `hitl_feedback`, and fault injection trips circuit breaker). |
-| **M8: Operational Dashboard & Golden Evals** | Next.js dashboard (HITL approval queue, end-to-end Trace Viewer, Cost/Latency telemetry) + Golden Dataset evaluation harness for regression gating prompt/model updates. | `frontend/`, `evals/golden_dataset.json`, `evals/run_evals.py` | `pytest && python evals/run_evals.py && npm --prefix frontend run build` |
+| **M8: Operational Dashboard & Golden Evals** | Next.js dashboard (HITL approval queue, end-to-end Trace Viewer, Cost/Latency telemetry) + Golden Dataset evaluation suite for regression gating prompt/model updates. | `frontend/`, `evals/golden_dataset.json`, `evals/run_evals.py` | `pytest && python evals/run_evals.py && npm --prefix frontend run build` |
 
 ---
 
@@ -165,7 +153,7 @@ Maintain this clean modular directory structure:
 ├── .env.example
 ├── docker-compose.yml
 ├── pyproject.toml / requirements.txt
-├── .genesis/
+├── project-details/
 │   ├── done.html
 │   ├── plan.md
 │   ├── implementation_notes.html
@@ -207,9 +195,16 @@ TIGER_DATABASE_URL=postgresql://user:password@host:port/tsdb?sslmode=require
 REDIS_URL=rediss://default:password@host:port
 
 # LLM Providers & Embeddings
+LLM_PROVIDER=deterministic   # or gemini
+GEMINI_API_KEY=...
+GEMINI_MODEL_HIGH=gemini-3.6-flash
+GEMINI_MODEL_FAST=gemini-3.5-flash-lite
+GEMINI_API_BASE_URL=https://generativelanguage.googleapis.com/v1beta
+GEMINI_TIMEOUT_SECONDS=60
 OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
-EMBEDDING_MODEL=text-embedding-3-small
+EMBEDDING_PROVIDER=deterministic   # or gemini
+EMBEDDING_MODEL=text-embedding-3-small   # gemini-embedding-2 when provider=gemini
 EMBEDDING_DIM=1536
 
 # Autonomy, Selectivity & Economics Guards

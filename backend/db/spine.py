@@ -93,7 +93,7 @@ class TigerDataSpine:
         self,
         settings: Optional[Settings] = None,
         sql_path: Optional[Path | str] = None,
-        db_uri: str = ":memory:",
+        db_uri: Optional[str] = None,
     ) -> None:
         self.settings = settings or get_settings()
         self.sql_path = (
@@ -105,7 +105,17 @@ class TigerDataSpine:
         self.introspection = parse_migration_sql(self.sql_path)
         self.settings.validate_schema_dimension(self.introspection.embedding_dimension)
 
-        self._conn = sqlite3.connect(db_uri, check_same_thread=False)
+        resolved_db_uri = db_uri or getattr(self.settings, "SPINE_SQLITE_PATH", ":memory:")
+        if not resolved_db_uri or resolved_db_uri == ":memory:":
+            resolved_db_uri = ":memory:"
+        else:
+            Path(resolved_db_uri).expanduser().resolve().parent.mkdir(
+                parents=True, exist_ok=True
+            )
+        self.db_uri = resolved_db_uri
+        self._conn = sqlite3.connect(
+            resolved_db_uri, check_same_thread=False, timeout=30.0
+        )
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON;")
         self._apply_migrations()

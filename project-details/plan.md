@@ -1,7 +1,7 @@
-# .genesis/plan.md — Master Milestone Plan (M1..M8)
+# project-details/plan.md — Master Milestone Plan (M1..M8)
 
 ## Overview
-This plan governs the end-to-end implementation of the **Production Multi-Agent PR Reviewer & AI-Native Engineering Harness** following the 5-Gate Execution Loop (`G0`–`G4`).
+This plan describes the end-to-end implementation of the **Production Multi-Agent PR Reviewer** and records verification for each milestone.
 
 ---
 

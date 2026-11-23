@@ -4,6 +4,8 @@
 .env
 .env.*
 !.env.example
+*credentials*.txt
+*credentials*.json
 certs/
 secrets/
 *.pem
@@ -61,6 +63,7 @@ pnpm-debug.log*
 # ---------------------------------------------------------------------------
 # Runtime artifacts & logs
 # ---------------------------------------------------------------------------
+data/
 *.log
 logs/
 *.pid
