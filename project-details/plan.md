@@ -97,3 +97,14 @@ This plan describes the end-to-end implementation of the **Production Multi-Agen
   - `backend/webhook/queue.py` (dashboard index, ownership-safe `close()`), `backend/worker.py` (queued → processing → done/failed transitions), `backend/webhook/api.py` (`GET /api/queue`, `POST /api/queue/trigger`), `tests/test_queue_api.py`
 - **Invariants Covered:** `INV-2` (manual triggers share webhook dedup path)
 - **Verification Command:** `pytest tests/test_queue_api.py -v` (5/5 PASSED)
+
+### SummarizerAgent Verdict Flow
+- **Touched File Boundaries:**
+  - `backend/agents/summarizer.py` (5th balanced agent: specialist summaries → own verdict with suggestions), `backend/agents/specialists.py` (`SpecialistSummary`, 5-line prompt directives, prompt versions `security/quality@v1.3.0` `testing/docs@v1.2.0`), `backend/prompts/registry.py` (`summarizer@v1.0.0`), `backend/pipeline.py` (every comment body built through the agent on findings, HITL/private-only, and clean paths), `backend/worker.py` (wires agent with live router), `tests/test_pr_summary.py`, `tests/test_review_pipeline.py`
+- **Invariants Covered:** `INV-7` (summaries carry grounded counts; the verdict adds no new claims)
+- **Verification Command:** `pytest tests/test_pr_summary.py tests/test_review_pipeline.py -q` (all PASSED) + live dry-run on `chrome_video_scraper#3` showing `Sub-agent analysis` + `Aggregator verdict`
+
+### Clean-Comment + Dashboard Auto-Post Defaults
+- **Touched File Boundaries:**
+  - `backend/config.py` (`POST_CLEAN_COMMENT=true` default), `backend/github/poster.py` (summary poster accepts zero findings), `backend/webhook/api.py` (`auto_post: true` trigger default, stored as `metadata.post_comments`), `frontend/src/app/page.tsx` (Post-to-GitHub checkbox, default on), `.env.example`
+- **Verification Command:** live `review` on `chrome_video_scraper#3` and `#5` posted all-clear comments (`pull/3#issuecomment-7111430397`, `pull/5#issuecomment-7111152221`)

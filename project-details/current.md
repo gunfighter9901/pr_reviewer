@@ -2,6 +2,12 @@
 
 ## Active Status: M1–M8 Completed | Live GitHub integration completed | Single-PR summary + live PR-grouped dashboard + Redis queue control completed | SummarizerAgent (5th agent) + clean-comment default + hosted-Redis default verified live on PR #3
 
+### 0c. Specialist summaries → aggregator verdict with suggestions (latest)
+- **Specialist prompts:** each of the four specialist system prompts now carries a 5-line specialty directive (scope, grounding, ranking, no-invention, return-a-summary) and versions bumped (`security/quality@v1.3.0`, `testing/docs@v1.2.0`). Each specialist returns its findings plus a summary: what it analyzed and its decision (`clean` / `findings_raised` / `degraded`) via `build_specialist_summary`.
+- **Aggregator verdict:** `SummarizerAgent` takes the returned specialist summaries, renders them as `### Sub-agent analysis`, then adds its own `### Aggregator verdict` (`POST` / `ESCALATED TO HUMAN` / `ALL-CLEAR`) with a suggestion — so the GitHub comment always shows the analysis, never just an approval. Pipeline also summarizes HITL/private-only signal instead of leaving the markdown empty.
+- **Live check (dry-run PR #3):** 78 added lines across 6 files, all four specialists `clean`, verdict `ALL-CLEAR / Safe to merge`.
+- **Tests:** 25 passed (`test_pr_summary` agent test + new `test_pipeline_comment_carries_specialist_summaries_and_verdict`).
+
 ### 0b. SummarizerAgent + clean-comment default + dashboard auto-post (latest)
 - **SummarizerAgent:** `backend/agents/summarizer.py` is a first-class agent like the four specialists — versioned prompt (`summarizer@v1.0.0`), `ModelRouter` model, `summarizer_completed` event with per-agent/per-severity balance counts, deterministic synthesis as ground truth. `backend/pipeline.py` builds every comment body through it (findings + clean paths); `backend/worker.py` wires it with the live router.
 - **Clean-comment default:** `POST_CLEAN_COMMENT=true` (new in `backend/config.py` + `.env.example`, default on). Clean PRs post a short “all clear” summary comment instead of staying silent; `false` restores silent clean PRs. `post_pr_summary_comment` no longer refuses `findings_count=0`.

@@ -14,7 +14,7 @@
 </head>
 <body>
   <h1>project-details/implementation_notes.html — Live Status</h1>
-  <p><strong>Session Updated:</strong> 2026-11-23 | <strong>Overall Build State:</strong> M1–M8 Built &amp; Independently Verified plus live GitHub integration, single-PR summaries, live dashboard, and Redis queue control (79/79 Pytest, 5/5 Golden Evals, Next.js Production Build)</p>
+  <p><strong>Session Updated:</strong> 2026-11-24 | <strong>Overall Build State:</strong> M1–M8 Built &amp; Independently Verified plus live GitHub integration, single-PR summaries, live dashboard, Redis queue control, SummarizerAgent verdict flow, and clean-comment + auto-post defaults (targeted suites green, live all-clear comments posted on PR #3/#5)</p>
 
   <h2>Milestone Status Matrix</h2>
   <table>
@@ -37,6 +37,8 @@
       <tr><td>Live GitHub Integration</td><td><span class="status done">DONE</span></td><td><code>pytest tests/test_github_client.py tests/test_review_pipeline.py tests/test_webhook_queue.py tests/test_diff_selection.py tests/test_specialist_fallback.py -v</code> (24 passed); real PR fetch + review dry run verified live</td></tr>
       <tr><td>Single-PR Summary Review</td><td><span class="status done">DONE</span></td><td><code>pytest tests/test_pr_summary.py -v</code> (9 passed); risk-ordered plain-language summaries, one-comment posting, <code>GET /api/pr-summaries</code></td></tr>
       <tr><td>Redis Queue Control</td><td><span class="status done">DONE</span></td><td><code>pytest tests/test_queue_api.py -v</code> (5 passed); <code>GET /api/queue</code> + <code>POST /api/queue/trigger</code> drove a live dashboard-triggered review end to end</td></tr>
+      <tr><td>SummarizerAgent Verdict Flow</td><td><span class="status done">DONE</span></td><td><code>pytest tests/test_pr_summary.py tests/test_review_pipeline.py -q</code> (all passed); specialist summaries + aggregator verdict with suggestions verified live on <code>chrome_video_scraper#3</code> dry-run</td></tr>
+      <tr><td>Clean-Comment + Auto-Post Defaults</td><td><span class="status done">DONE</span></td><td>live <code>review</code> on <code>chrome_video_scraper#3</code> and <code>#5</code> posted all-clear comments (<code>pull/3#issuecomment-7111430397</code>, <code>pull/5#issuecomment-7111152221</code>)</td></tr>
     </tbody>
   </table>
 
@@ -45,13 +47,15 @@
     <li><strong>Live GitHub path:</strong> <code>backend/webhook/queue.py</code> enqueues verified webhook deliveries through ARQ; <code>backend/pipeline.py</code> fetches the PR diff/files via <code>backend/github/client.py</code>, runs the specialist engine, routes findings, and posts with <code>GitHubReviewTransport</code>. Inline 422 failures fall back to a PR conversation comment. <code>python -m backend.cli check/review</code> exercises the same path manually. A real token fetched <code>gunfighter9901/chrome_video_scraper#1</code> (253 files, 2.08 MB) and completed live reviews.</li>
     <li><strong>Large-PR guardrails:</strong> <code>backend/diff_utils.py</code> drops vendored/generated files, lockfiles, maps, bundles, and binaries; prioritizes source; and caps the submitted diff at <code>MAX_REVIEW_DIFF_BYTES</code> / <code>MAX_REVIEW_FILE_BYTES</code>. Covered by <code>tests/test_diff_selection.py</code> (6 tests).</li>
     <li><strong>LLM outage fallback:</strong> deterministic specialist rules always run; Gemini findings are merged on success, and 429/503/timeout/empty responses fall back to deterministic findings. Covered by <code>tests/test_specialist_fallback.py</code> (3 tests). Live quota exhaustion still produced 14 routed findings.</li>
+    <li><strong>SummarizerAgent verdict flow:</strong> each specialist prompt carries a 5-line specialty directive ending in “return a summary of what you analyzed and your decision”; <code>build_specialist_summary</code> turns real engine outputs into per-agent summaries (<code>clean</code> / <code>findings_raised</code> / <code>degraded</code>); <code>SummarizerAgent</code> renders them as <code>Sub-agent analysis</code>, then adds its own <code>Aggregator verdict</code> (<code>POST</code> / <code>ESCALATED TO HUMAN</code> / <code>ALL-CLEAR</code>) with suggestions. Every comment body is built through the agent, including HITL/private-only and clean paths.</li>
+    <li><strong>Clean-comment + auto-post defaults:</strong> <code>POST_CLEAN_COMMENT=true</code> posts an all-clear summary on clean PRs; queue triggers default to <code>auto_post: true</code> (stored as <code>metadata.post_comments</code>, honored by the worker); the dashboard trigger has a “Post to GitHub” checkbox, on by default.</li>
     <li><strong>Gemini LLM (opt-in):</strong> <code>backend/agents/llm.py</code> implements the REST <code>generateContent</code> adapter with schema-constrained JSON, added-line grounding, safety-block handling, and explicit <code>LLM_PROVIDER=gemini</code> selection. Covered by <code>tests/test_gemini_provider.py</code> (7 tests). Live verification returned a grounded critical SQL-injection finding at <code>app/db.py:4</code> (0.99 confidence) using <code>gemini-3.6-flash</code>.</li>
     <li><strong>Gemini Embedding 2 (opt-in):</strong> <code>EMBEDDING_PROVIDER=gemini</code> selects <code>GeminiEmbedder</code> with <code>output_dimensionality=1536</code>, document/query task types, and fail-fast dimension checks. Covered by <code>tests/test_gemini_embedding.py</code> (6 tests). Live verification produced 1536-dimension vectors and a successful index + hybrid retrieval; a live Tiger <code>&lt;=&gt;</code> nearest-neighbour query returned cosine similarity 1.0.</li>
   </ul>
 
   <h2>Known Gaps / Active Blockers</h2>
   <ul>
-    <li><strong>GitHub live API:</strong> a real fine-grained PAT is configured and live PR fetches/reviews succeed. Public comment posting was not exercised because the selected PR's findings were all routed to HITL/private alerts; the poster path remains covered by mocked payload tests.</li>
+    <li><strong>GitHub live API:</strong> a real fine-grained PAT is configured and live PR fetches/reviews succeed. All-clear summary comments were posted live on <code>chrome_video_scraper#3</code> (<code>pull/3#issuecomment-7111430397</code>) and <code>#5</code>; HITL/private-routed findings remain withheld from public threads by design.</li>
     <li><strong>Runtime persistence:</strong> <code>TigerDataSpine</code> uses SQLite, not the Tiger Cloud Postgres URL. The live Tiger schema, <code>vector(1536)</code>, hypertable, indexes, continuous aggregates, and nearest-neighbour query were verified directly; Postgres is not yet the runtime backend.</li>
     <li><strong>Hosting:</strong> local run (uvicorn ingress + ARQ worker + Next.js dashboard). The GitHub webhook URL must point at a public address tunneled to the ingress.</li>
   </ul>

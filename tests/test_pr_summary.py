@@ -237,14 +237,37 @@ async def test_summarizer_agent_is_balanced_versioned_and_logged() -> None:
             seen.append(kwargs)
 
     agent_with_log = SummarizerAgent(event_logger=SpyLogger())  # type: ignore[arg-type]
+    from backend.agents.specialists import build_specialist_summary
+
+    summaries = [
+        build_specialist_summary(
+            name,
+            lines_scanned=12,
+            files_scanned=2,
+            findings=[f for f in findings if f.agent_type == name],
+        )
+        for name in ("security", "quality", "testing", "docs")
+    ]
     summary, markdown = await agent_with_log.summarize(
-        "acme/demo", 7, "abc", findings, trace_id="t1", delivery_id="d1"
+        "acme/demo", 7, "abc", findings, trace_id="t1", delivery_id="d1",
+        specialist_summaries=summaries,
+        aggregator_decision="auto_posted",
+        aggregator_suggestion="Fix the posted findings, highest severity first, before merge.",
     )
     assert summary.total_points == 4
     # Balanced: every specialist represented, risk-ordered (high first).
     assert summary.points[0].severity == "high"
     assert {p.agent_type for p in summary.points} == {"security", "quality", "testing", "docs"}
     assert "PR Review" in markdown
+    # The comment carries each specialist's returned summary, then the
+    # aggregator's own verdict with suggestions — never just an approval.
+    assert "### Sub-agent analysis" in markdown
+    assert "Scope: 12 added line(s) across 2 file(s)" in markdown
+    assert "- **Security**" in markdown and "- **Docs**" in markdown
+    assert "Decision: findings_raised" in markdown
+    assert "### Aggregator verdict" in markdown
+    assert "Decision: **POST**" in markdown
+    assert "highest severity first" in markdown
     assert seen and seen[0]["agent_name"] == "summarizer"
     assert seen[0]["metadata"]["per_agent"] == {
         "security": 1,

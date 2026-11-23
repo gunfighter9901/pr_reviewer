@@ -4,10 +4,11 @@
 
 Drop a GitHub PR on it and get back **one structured review** — every issue ordered
 by risk and explained in plain language — instead of a spray of bot comments.
-Four specialist agents (security, quality, testing, docs) read the diff, the
-aggregator merges their results into a single verdict, a fifth balanced
-SummarizerAgent renders that verdict as one plain-language review, and a
-routing gate decides what gets posted publicly, what needs a human, and what
+Four specialist agents (security, quality, testing, docs) read the diff, each
+returning its findings plus a summary of what it analyzed and its decision.
+A fifth balanced SummarizerAgent takes those returned summaries, merges them
+into a single verdict, and adds its own decision with suggestions. A routing
+gate then decides what gets posted publicly, what needs a human, and what
 stays private. Uncertain or sensitive findings never touch the public thread.
 Clean PRs still get a short “all clear” comment by default.
 
@@ -35,16 +36,16 @@ Clean PRs still get a short “all clear” comment by default.
                             │ a reviewer picks up the job
                             ▼
 ┌────────────────────────────────────────────────────────┐
-│ 3. FOUR SPECIALISTS — one combined review               │
+│ 3. FOUR SPECIALISTS — each returns findings + summary  │
 │                                                        │
 │     ┌──────────┬──────────────┬────────────┐           │
 │     ▼          ▼              ▼            ▼           │
 │ [Security] [Quality]      [Tests]      [Docs]          │
-│     │          │              │            │            │
+│     │ summary  │ summary      │ summary    │ summary    │
 │     └──────────┴──────────────┴────────────┘           │
-│           ▼  (everything merged, worst first)          │
-│    [ One review ] ──► duplicates removed, explained     │
-│                       in plain words                    │
+│           ▼  (aggregator merges, worst first)          │
+│    [ SummarizerAgent ] ──► sub-agent analysis +        │
+│         own verdict with suggestions, in plain words   │
 └───────────────────────────┬────────────────────────────┘
                             │
                             ▼
@@ -97,7 +98,7 @@ The technical version of this map (modules, tests, verified behavior) lives in
 
 ## Features
 
-- **Single-comment reviews** — one risk-ordered, plain-language summary per PR.
+- **Single-comment reviews** — one risk-ordered review per PR: every specialist's summary plus the aggregator's own verdict with suggestions, in plain language.
 - **Selectivity first** — only grounded, deduplicated findings; clean PRs get a short “all clear” comment by default (`POST_CLEAN_COMMENT=false` for silent clean PRs).
 - **Safety by construction** — critical findings are never posted to public PRs.
 - **Human-in-the-loop** — approve / reject decisions persist and calibrate future sensitivity.
