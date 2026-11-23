@@ -14,7 +14,7 @@
 </head>
 <body>
   <h1>project-details/implementation_notes.html — Live Status</h1>
-  <p><strong>Session Updated:</strong> 2026-11-23 | <strong>Overall Build State:</strong> M1–M8 Built &amp; Independently Verified (41/41 Pytest, 5/5 Golden Evals, Next.js Production Build)</p>
+  <p><strong>Session Updated:</strong> 2026-11-23 | <strong>Overall Build State:</strong> M1–M8 Built &amp; Independently Verified plus live GitHub integration (56/56 Pytest, 5/5 Golden Evals, Next.js Production Build)</p>
 
   <h2>Milestone Status Matrix</h2>
   <table>
@@ -34,20 +34,22 @@
       <tr><td>M6: Hybrid RAG &amp; Context Engineering</td><td><span class="status done">DONE</span></td><td><code>pytest tests/test_m6_retrieval.py -v</code> (1 passed)</td></tr>
       <tr><td>M7: HITL Gate, GitHub Poster &amp; Reliability</td><td><span class="status done">DONE</span></td><td><code>pytest tests/test_m7_hitl.py -v</code> (3 passed)</td></tr>
       <tr><td>M8: Operational Dashboard &amp; Golden Evals</td><td><span class="status done">DONE</span></td><td><code>pytest &amp;&amp; python evals/run_evals.py &amp;&amp; npm --prefix frontend run build</code> (All passed)</td></tr>
+      <tr><td>Live GitHub Integration</td><td><span class="status done">DONE</span></td><td><code>pytest tests/test_github_client.py tests/test_review_pipeline.py tests/test_webhook_queue.py -v</code> (15 passed); Redis/ARQ ingress startup verified live</td></tr>
     </tbody>
   </table>
 
   <h2>Provider Extension</h2>
   <ul>
+    <li><strong>Live GitHub path:</strong> <code>backend/webhook/queue.py</code> enqueues verified webhook deliveries through ARQ; <code>backend/pipeline.py</code> fetches the PR diff/files via <code>backend/github/client.py</code>, runs the specialist engine, routes findings, and posts with <code>GitHubReviewTransport</code>. Inline 422 failures fall back to a PR conversation comment. <code>python -m backend.cli check/review</code> exercises the same path manually.</li>
     <li><strong>Gemini LLM (opt-in):</strong> <code>backend/agents/llm.py</code> implements the REST <code>generateContent</code> adapter with schema-constrained JSON, added-line grounding, safety-block handling, and explicit <code>LLM_PROVIDER=gemini</code> selection. Covered by <code>tests/test_gemini_provider.py</code> (7 tests). Live verification returned a grounded critical SQL-injection finding at <code>app/db.py:4</code> (0.99 confidence) using <code>gemini-3.6-flash</code>.</li>
     <li><strong>Gemini Embedding 2 (opt-in):</strong> <code>EMBEDDING_PROVIDER=gemini</code> selects <code>GeminiEmbedder</code> with <code>output_dimensionality=1536</code>, document/query task types, and fail-fast dimension checks. Covered by <code>tests/test_gemini_embedding.py</code> (6 tests). Live verification produced 1536-dimension vectors and a successful index + hybrid retrieval; a live Tiger <code>&lt;=&gt;</code> nearest-neighbour query returned cosine similarity 1.0.</li>
   </ul>
 
   <h2>Known Gaps / Active Blockers</h2>
   <ul>
-    <li><strong>GitHub live API:</strong> <code>GITHUB_TOKEN</code> is still a placeholder and no GitHub App private key is installed, so live PR comment/creation calls were not exercised. Branch push and a GitHub "Create pull request" URL remain available.</li>
-    <li><strong>Runtime persistence:</strong> <code>TigerDataSpine</code> still uses in-memory SQLite. The live Tiger Cloud schema, <code>vector(1536)</code>, hypertable, indexes, continuous aggregates, and nearest-neighbour query were verified directly; Postgres is not yet the runtime backend.</li>
-    <li><strong>End-to-end queue:</strong> FastAPI ingress still uses the in-memory idempotency router; Redis queue/checkpoint wiring is exercised through the worker and verified live (<code>PING</code> + dedup claim), but webhook → Redis → worker is not a single running path.</li>
+    <li><strong>GitHub live API:</strong> <code>GITHUB_TOKEN</code> is still a placeholder in <code>.env</code>, so a real PR diff fetch and comment post have not been exercised yet. Add a fine-grained token with Pull requests read/write + Contents read, then run <code>python -m backend.cli check --repo owner/repo --pr N</code> followed by <code>review</code>.</li>
+    <li><strong>Runtime persistence:</strong> <code>TigerDataSpine</code> uses SQLite, not the Tiger Cloud Postgres URL. The live Tiger schema, <code>vector(1536)</code>, hypertable, indexes, continuous aggregates, and nearest-neighbour query were verified directly; Postgres is not yet the runtime backend.</li>
+    <li><strong>Hosting:</strong> Docker assets are added, but <code>docker compose config</code> could not be validated because Docker is not installed on this machine. GitHub requires a public HTTPS ingress URL.</li>
   </ul>
 </body>
 </html>

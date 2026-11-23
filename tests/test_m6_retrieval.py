@@ -39,7 +39,7 @@ def calculate_invoice_subtotal(line_items: list[float], tax_rate: float) -> floa
 @pytest.mark.asyncio
 async def test_m6_index_repo_and_execute_hybrid_retrieval_across_3_memories() -> None:
     """Index sample repo, seed procedural ADRs & episodic disputes, and verify hybrid query on PR diff."""
-    settings = Settings(EMBEDDING_DIM=1536)
+    settings = Settings(_env_file=None, EMBEDDING_DIM=1536)
     spine = TigerDataSpine(settings=settings)
     event_logger = EventSpineLogger(spine=spine)
     indexer = RepositoryIndexer(spine=spine, settings=settings, event_logger=event_logger)

@@ -10,61 +10,73 @@ The result is faster reviews, less reviewer fatigue, and responsible automation 
 
 ## How It Works
 
-1. **It notices a new code change.** When a developer opens or updates a pull request on GitHub, the system receives a secure notification and starts reviewing right away. Duplicate notifications are ignored.
-2. **It gathers the surrounding context.** Before commenting, it looks at related code, past review decisions, and the team's own conventions. This helps it understand whether a change fits the project.
-3. **It takes on the repetitive checks.** Security, code quality, testing, and documentation specialists examine the change at the same time — like a small review team working together.
-4. **It keeps only the strongest feedback.** Overlapping comments are combined, feedback that cannot be tied to the code is filtered out, and every remaining comment points to the exact file and line it refers to.
-5. **It sends feedback to the right place.** Clear, well-supported comments are posted on the pull request. Uncertain findings go to a human review queue. Critical security issues are never posted publicly and are sent privately to the team.
-6. **It improves while staying in control.** Human decisions help improve future reviews. Every action is recorded, and a spending limit keeps costs predictable.
+1. **GitHub sends a webhook** when a pull request is opened, reopened, or updated.
+2. **The ingress verifies the signature** and enqueues a job in Redis. Duplicate deliveries are ignored.
+3. **The worker fetches the PR diff** from the GitHub API using `GITHUB_TOKEN`.
+4. **Four specialists analyze the added lines** — security, quality, testing, and docs — and the aggregator keeps only grounded, deduplicated findings.
+5. **The routing gate decides**: high-confidence findings are posted to the PR, low-confidence findings go to the HITL queue, and critical security findings are never posted publicly.
+6. **The GitHub poster writes the comments** and the event/finding history is stored in the local spine.
 
 ## Project Layout
 
 ```text
 ├── backend/
-│   ├── webhook/         # FastAPI webhook receiver, HMAC security, idempotent router
-│   ├── db/              # PostgreSQL/TimescaleDB/pgvector migrations & data spine
-│   ├── observability/   # Append-only event logger & daily budget circuit breaker
-│   ├── orchestrator/    # Abstract WorkflowEngine & LangGraph adapter
-│   ├── agents/          # Security, Quality, Testing, Docs agents & aggregator
-│   ├── prompts/         # Versioned prompt registry
-│   ├── retrieval/       # AST code chunker & hybrid vector + FTS retriever
-│   ├── gates/           # Confidence/severity HITL routing & feedback decay
-│   ├── github/          # Idempotent GitHub PR comment poster
-│   ├── reliability/     # Circuit breaker, retries, and timeouts
-│   └── worker.py        # Redis / ARQ background worker
-├── frontend/            # Next.js dashboard (HITL queue, trace viewer, cost metrics)
-├── evals/               # Golden PR dataset & regression evaluation runner
-└── tests/               # Unit, integration, and fault-injection test suites (M1–M8)
+│   ├── webhook/         # FastAPI receiver, HMAC security, Redis/ARQ handoff
+│   ├── worker.py         # ARQ worker + pipeline builder
+│   ├── pipeline.py       # diff -> specialists -> HITL -> GitHub
+│   ├── cli.py            # manual `check` and `review` commands
+│   ├── github/           # GitHub API client + review-comment poster
+│   ├── db/               # PostgreSQL/TimescaleDB schema & local SQLite spine
+│   ├── agents/           # Security, Quality, Testing, Docs agents & aggregator
+│   ├── orchestrator/     # Abstract WorkflowEngine & LangGraph adapter
+│   ├── gates/            # Confidence/severity HITL routing
+│   └── observability/    # Append-only event spine & budget guard
+├── frontend/             # Next.js operational dashboard
+├── evals/                # Golden PR regression dataset
+├── tests/                # Offline unit/integration/fault-injection tests
+├── Dockerfile            # Backend image (ingress + worker)
+├── frontend/Dockerfile   # Dashboard image
+└── docker-compose.yml    # Redis + ingress + worker + dashboard
 ```
 
 ## Quick Start
 
-### 1. Backend & Tests
+### 1. Install
 
-Install Python dependencies and configure your environment:
+This repo uses Python 3.12:
 
 ```bash
+python3.12 -m venv .venv
+.venv/bin/pip install -r requirements.txt
 cp .env.example .env
-pip install -r requirements.txt
 ```
 
-Start the FastAPI webhook server locally:
+### 2. Configure `.env`
 
-```bash
-uvicorn backend.webhook.app:app --reload --port 8000
+At minimum, set the GitHub values:
+
+```ini
+GITHUB_WEBHOOK_SECRET=<openssl rand -hex 32>
+GITHUB_TOKEN=<fine-grained PAT or classic PAT>
+QUEUE_BACKEND=redis
+REDIS_URL=redis://localhost:6379/0
+SPINE_SQLITE_PATH=./data/pr_reviewer.sqlite
 ```
 
-Run the test suite and golden dataset evaluations:
+Use **two different values**:
 
-```bash
-pytest -v
-python evals/run_evals.py
-```
+- `GITHUB_WEBHOOK_SECRET` is the shared secret you also paste into GitHub's webhook settings. It only signs webhook deliveries.
+- `GITHUB_TOKEN` is the API token used to fetch the PR diff and post review comments.
 
-#### Optional: Live Gemini reviews
+For a **fine-grained PAT**, grant:
 
-The default path is deterministic and offline. To run specialist reviews through
-Gemini, put a Google AI Studio key in `.env` and switch the provider:
+- **Pull requests:** Read and write
+- **Contents:** Read
+- **Metadata:** Read (usually included automatically)
+
+For a **classic PAT**, use `repo` for private repositories or `public_repo` for public repositories.
+
+To use Gemini for the specialist reviews:
 
 ```ini
 LLM_PROVIDER=gemini
@@ -73,15 +85,105 @@ GEMINI_MODEL_HIGH=gemini-3.6-flash
 GEMINI_MODEL_FAST=gemini-3.5-flash-lite
 ```
 
-The worker wires the live provider via `backend/agents/llm.py`. Tests and golden
-evals keep using the deterministic specialists so results stay reproducible.
-Gemini responses are schema-constrained and every cited file, line, and evidence
-snippet is checked against the added diff lines before a finding is accepted.
+The default `LLM_PROVIDER=deterministic` is fully offline and is what the tests and golden evals use.
 
-#### Optional: Gemini Embedding 2
+### 3. Review an existing PR without a webhook
 
-Embeddings are deterministic by default. To use Gemini Embedding 2 for semantic
-memory, add:
+This is the fastest way to verify the whole path against your repository:
+
+```bash
+# Verify the token and fetch PR metadata/diff size
+.venv/bin/python -m backend.cli check --repo owner/repository --pr 12
+
+# Analyze and route, without posting comments
+.venv/bin/python -m backend.cli review --repo owner/repository --pr 12 --no-post
+
+# Analyze and post eligible comments
+.venv/bin/python -m backend.cli review --repo owner/repository --pr 12
+```
+
+The CLI prints a JSON summary with `findings_count`, `auto_posted`, `hitl_escalated`, `private_security_alerts`, and the posted comment IDs/URLs.
+
+### 4. Run the webhook locally
+
+Start Redis (or use the Docker Compose stack in the next section):
+
+```bash
+docker run --rm -p 6379:6379 redis:7-alpine
+```
+
+Start the ingress and worker in two terminals:
+
+```bash
+.venv/bin/uvicorn backend.webhook.app:app --reload --port 8000
+.venv/bin/arq backend.worker.WorkerSettings
+```
+
+Expose the ingress to GitHub with a tunnel:
+
+```bash
+npx smee-client --url https://smee.io/YOUR_CHANNEL --target http://localhost:8000/webhooks/github
+```
+
+Or use `ngrok http 8000` and copy the HTTPS forwarding URL.
+
+Then in your GitHub repository:
+
+1. **Settings → Webhooks → Add webhook**
+2. **Payload URL:** `https://YOUR_PUBLIC_URL/webhooks/github`
+3. **Content type:** `application/json`
+4. **Secret:** the exact `GITHUB_WEBHOOK_SECRET` value from `.env`
+5. **Events:** “Let me select individual events” → **Pull requests**
+6. **Active:** checked
+
+Open or update a PR. The ingress returns `202` with `{"status":"queued"}`, the worker fetches the diff, and eligible findings appear as PR review comments.
+
+### 5. Host it
+
+#### Docker Compose on a VPS
+
+```bash
+cp .env.example .env
+# fill in GITHUB_WEBHOOK_SECRET, GITHUB_TOKEN, REDIS_URL, GEMINI_API_KEY, etc.
+docker compose up -d --build
+```
+
+This starts Redis, the ingress on port `8000`, the worker, and the dashboard on port `3000`. The worker stores findings in the `review-data` volume at `/data/pr_reviewer.sqlite`.
+
+Put Caddy or Nginx in front of port `8000` with HTTPS, then use:
+
+```text
+https://your-domain.example/webhooks/github
+```
+
+as the GitHub payload URL.
+
+#### Render / Railway / Fly.io
+
+Deploy the repository as **two services** plus a Redis instance:
+
+| Service | Command |
+|---|---|
+| Ingress (public HTTPS) | `uvicorn backend.webhook.app:app --host 0.0.0.0 --port $PORT` |
+| Worker (background) | `arq backend.worker.WorkerSettings` |
+
+Give both services the same environment variables, especially `REDIS_URL`, `QUEUE_BACKEND=redis`, `GITHUB_WEBHOOK_SECRET`, `GITHUB_TOKEN`, and the Gemini settings. If the platform provides a persistent disk, set `SPINE_SQLITE_PATH` to a path on that disk.
+
+Use the ingress service's public HTTPS URL as the GitHub webhook payload URL. The worker does not need a public URL.
+
+## Tests and Evals
+
+```bash
+.venv/bin/python -m pytest -q
+.venv/bin/python evals/run_evals.py
+npm --prefix frontend run build
+```
+
+Tests and golden evals are fully offline: they use in-memory SQLite, fakeredis, deterministic specialists, and mocked HTTP transports. No GitHub, Gemini, Tiger, or Redis credentials are needed.
+
+## Optional: Gemini Embedding 2
+
+Embeddings are deterministic by default. To use Gemini Embedding 2 for semantic memory:
 
 ```ini
 EMBEDDING_PROVIDER=gemini
@@ -89,22 +191,31 @@ EMBEDDING_MODEL=gemini-embedding-2
 EMBEDDING_DIM=1536
 ```
 
-The adapter requests `output_dimensionality=1536` to match the committed
-`vector(1536)` schema, uses `RETRIEVAL_DOCUMENT` for indexed chunks and
-`RETRIEVAL_QUERY` for search queries, and raises on any dimension mismatch.
+The adapter requests `output_dimensionality=1536` to match the committed `vector(1536)` schema, uses `RETRIEVAL_DOCUMENT` for indexed chunks and `RETRIEVAL_QUERY` for search queries, and raises on any dimension mismatch.
 
-### 2. Frontend Dashboard
+## Frontend Dashboard
 
 ```bash
-cd frontend
-npm install
-npm run dev
+npm --prefix frontend install
+npm --prefix frontend run dev
 ```
 
-Open `http://localhost:3000` to view the HITL Approval Queue, End-to-End Trace Viewer, and LLM Cost Dashboard.
+Open `http://localhost:3000` for the HITL queue, trace viewer, and cost dashboard.
 
-### 3. Docker Compose (Full Stack)
+## Troubleshooting
 
-```bash
-docker compose up --build
-```
+| Symptom | Likely cause / fix |
+|---|---|
+| `401 Bad credentials` or `403` from GitHub | `GITHUB_TOKEN` is missing, expired, or lacks Pull requests/Contents permissions. |
+| Webhook returns `401 unauthorized` | `GITHUB_WEBHOOK_SECRET` does not match the secret in GitHub's webhook settings. |
+| Webhook returns `202 ignored` | The event is not `pull_request`, or the action is not `opened`/`synchronize`/`reopened`. |
+| Webhook returns `202 queued` but nothing happens | Ingress and worker must use the same `REDIS_URL` and `QUEUE_BACKEND=redis`; check the worker logs. |
+| No comments on the PR | No finding passed grounding/confidence routing. Run `python -m backend.cli review ... --no-post` to inspect the summary. |
+| Inline comment fails with `422` | The line is not part of the diff; the poster automatically falls back to a PR conversation comment. |
+| `GITHUB_TOKEN is missing or still a placeholder` | Replace `ghp_fallback_personal_access_token` in `.env` with a real token. |
+
+## Security Notes
+
+- `.env` is gitignored. Never commit tokens, webhook secrets, or private keys.
+- `GITHUB_WEBHOOK_SECRET` signs webhook deliveries; `GITHUB_TOKEN` authorizes API calls. Rotate them independently.
+- Critical security findings are never posted to public PRs; they are routed privately to the HITL queue.

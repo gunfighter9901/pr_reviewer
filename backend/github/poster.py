@@ -87,6 +87,7 @@ class GitHubPRPoster:
                 "commit_sha": commit_sha,
                 "path": finding.file_path,
                 "line": finding.line_start,
+                "line_end": finding.line_end,
                 "body": self.format_inline_comment(finding),
                 "idempotency_key": idem_key,
             }

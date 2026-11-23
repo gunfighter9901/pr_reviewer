@@ -21,7 +21,7 @@ from backend.reliability.circuit_breaker import (
 
 @pytest.fixture()
 def m7_env() -> tuple[TigerDataSpine, EventSpineLogger, HITLRoutingGate, FeedbackDecayEngine]:
-    settings = Settings(CONFIDENCE_THRESHOLD=0.75)
+    settings = Settings(_env_file=None, CONFIDENCE_THRESHOLD=0.75)
     spine = TigerDataSpine(settings=settings)
     event_logger = EventSpineLogger(spine=spine)
     gate = HITLRoutingGate(spine=spine, settings=settings, event_logger=event_logger)

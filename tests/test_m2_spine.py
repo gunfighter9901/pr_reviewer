@@ -10,7 +10,7 @@ from backend.db.spine import ImmutableAuditSpineError, TigerDataSpine, parse_mig
 
 @pytest.fixture()
 def spine() -> TigerDataSpine:
-    return TigerDataSpine(settings=Settings(EMBEDDING_DIM=1536))
+    return TigerDataSpine(settings=Settings(_env_file=None, EMBEDDING_DIM=1536))
 
 
 def test_m2_extensions_hypertable_and_indexes_registered(spine: TigerDataSpine) -> None:
@@ -82,7 +82,7 @@ def test_inv4_agent_events_rejects_update_delete_and_truncate(spine: TigerDataSp
 
 def test_inv5_startup_dimension_mismatch_fails_fast() -> None:
     """INV-5: Configured EMBEDDING_DIM mismatching code_chunks.embedding vector(1536) fails at startup."""
-    bad_settings = Settings(EMBEDDING_DIM=768)
+    bad_settings = Settings(_env_file=None, EMBEDDING_DIM=768)
     with pytest.raises(DimensionMismatchError, match="INV-5 Violation"):
         TigerDataSpine(settings=bad_settings)
 

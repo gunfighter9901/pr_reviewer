@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from typing import Any, Optional
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator, Optional
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,6 +14,8 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from backend.config import Settings, get_settings
+from backend.github.client import is_real_github_token
+from backend.webhook.queue import ArqWebhookQueue
 from backend.webhook.router import IdempotentWebhookRouter
 from backend.webhook.security import WebhookSignatureError, verify_github_signature
 
@@ -25,11 +28,27 @@ def create_app(
 ) -> FastAPI:
     """Create and configure the FastAPI webhook ingress application."""
     resolved_settings = settings or get_settings()
-    resolved_router = router or IdempotentWebhookRouter()
+    resolved_router = router
+
+    @asynccontextmanager
+    async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+        queue: Optional[ArqWebhookQueue] = None
+        if resolved_router is None and resolved_settings.QUEUE_BACKEND == "redis":
+            queue = ArqWebhookQueue(resolved_settings)
+            await queue.connect()
+            application.state.webhook_router = IdempotentWebhookRouter(
+                enqueue_callback=queue.enqueue_job
+            )
+        try:
+            yield
+        finally:
+            if queue is not None:
+                await queue.close()
 
     application = FastAPI(
         title="Production Multi-Agent PR Reviewer — Stateless Ingress",
         version="1.0.0",
+        lifespan=lifespan,
     )
 
     application.add_middleware(
@@ -41,13 +60,19 @@ def create_app(
     )
 
     application.state.settings = resolved_settings
-    application.state.webhook_router = resolved_router
+    application.state.webhook_router = resolved_router or IdempotentWebhookRouter()
     application.state.event_logger = event_logger
     application.state.budget_guard = budget_guard
 
     @application.get("/health")
-    async def health_check() -> dict[str, str]:
-        return {"status": "ok"}
+    async def health_check() -> dict[str, Any]:
+        return {
+            "status": "ok",
+            "queue_backend": resolved_settings.QUEUE_BACKEND,
+            "github_token_configured": is_real_github_token(
+                resolved_settings.GITHUB_TOKEN
+            ),
+        }
 
     @application.post("/webhooks/github")
     async def github_webhook(request: Request) -> JSONResponse:

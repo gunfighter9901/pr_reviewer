@@ -37,7 +37,7 @@ def _sample_pr_payload(action: str = "opened", pr_number: int = 42) -> Dict[str,
 
 @pytest.fixture()
 def webhook_env() -> tuple[TestClient, IdempotentWebhookRouter, Settings]:
-    settings = Settings(GITHUB_WEBHOOK_SECRET=TEST_SECRET)
+    settings = Settings(_env_file=None, GITHUB_WEBHOOK_SECRET=TEST_SECRET)
     router = IdempotentWebhookRouter()
     app = create_app(settings=settings, router=router)
     client = TestClient(app)

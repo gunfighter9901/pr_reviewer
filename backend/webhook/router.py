@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Callable, Coroutine, Dict, List, Optional, Set
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
 
 from backend.models import PullRequestWebhookPayload, QueuedPRJob
 
@@ -27,7 +27,9 @@ class IdempotentWebhookRouter:
 
     def __init__(
         self,
-        enqueue_callback: Optional[Callable[[QueuedPRJob], Coroutine[Any, Any, None]]] = None,
+        enqueue_callback: Optional[
+            Callable[[QueuedPRJob], Awaitable[Optional[bool]]]
+        ] = None,
     ) -> None:
         self._seen_deliveries: Set[str] = set()
         self._queued_jobs: List[QueuedPRJob] = []
@@ -112,7 +114,16 @@ class IdempotentWebhookRouter:
 
         self._queued_jobs.append(job)
         if self._enqueue_callback is not None:
-            await self._enqueue_callback(job)
+            enqueued = await self._enqueue_callback(job)
+            if enqueued is False:
+                self._queued_jobs.pop()
+                return RouteResult(
+                    status="duplicate",
+                    http_status=200,
+                    delivery_id=delivery_id,
+                    trace_id=resolved_trace_id,
+                    reason="Queue rejected duplicate X-GitHub-Delivery",
+                )
 
         return RouteResult(
             status="queued",

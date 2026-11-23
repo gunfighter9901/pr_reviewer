@@ -29,14 +29,20 @@ class Settings(BaseSettings):
     GITHUB_APP_ID: str = Field(default="123456")
     GITHUB_PRIVATE_KEY_PATH: str = Field(default="./certs/github-private-key.pem")
     GITHUB_TOKEN: str = Field(default="ghp_fallback_personal_access_token")
+    GITHUB_API_BASE_URL: str = Field(default="https://api.github.com")
+    GITHUB_TIMEOUT_SECONDS: float = Field(default=30.0, gt=0.0)
 
     # Unified Data Spine (Tiger Cloud / TimescaleDB + pgvectorscale)
     TIGER_DATABASE_URL: str = Field(
         default="postgresql://user:password@localhost:5432/tsdb?sslmode=disable"
     )
+    # Local relational/checkpoint store. Use a file path to persist findings across worker jobs.
+    SPINE_SQLITE_PATH: str = Field(default=":memory:")
 
     # Queue & Checkpointing (Upstash / Redis)
     REDIS_URL: str = Field(default="redis://localhost:6379/0")
+    # memory: in-process only (tests / dry runs). redis: webhook -> ARQ worker.
+    QUEUE_BACKEND: Literal["memory", "redis"] = Field(default="memory")
 
     # LLM Providers & Embeddings
     # deterministic: regex specialists (default, offline, test-safe)
