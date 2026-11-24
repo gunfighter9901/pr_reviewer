@@ -12,6 +12,9 @@ gate then decides what gets posted publicly, what needs a human, and what
 stays private. Uncertain or sensitive findings never touch the public thread.
 Clean PRs still get a short “all clear” comment by default.
 
+<img width="1366" height="773" alt="Screenshot 2026-11-24 at 4 13 58 AM" src="https://github.com/user-attachments/assets/dccb2d19-3d0e-4d45-b898-4786be7f5ec6" />
+)
+
 ## How it works
 
 ```text
