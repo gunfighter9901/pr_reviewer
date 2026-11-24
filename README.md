@@ -194,8 +194,9 @@ entirely: no `redis-server` needed.
    ```
 
    ```bash
-   # Terminal 2 — background worker (does the actual review)
-   .venv/bin/arq backend.worker.WorkerSettings
+   # Terminal 2 — background worker (does the actual review).
+   # The loop self-heals: if hosted Redis blips, the worker restarts in 5s.
+   while true; do .venv/bin/arq backend.worker.WorkerSettings; echo "WORKER EXITED $? — restarting in 5s"; sleep 5; done
    ```
 
    ```bash
